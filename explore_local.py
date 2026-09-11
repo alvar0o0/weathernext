@@ -30,20 +30,20 @@ def get_target_file(custom_path: str | None = None) -> Path:
 
 def explore_parquet(file_path: Path):
     print(f"\n=======================================================")
-    print(f"📊 EXPLORADOR OFFLINE DE WEATHERNEXT (Polars Engine)")
+    print(f" EXPLORADOR OFFLINE DE WEATHERNEXT (Polars Engine)")
     print(f"=======================================================")
-    print(f"📂 Archivo analizado: {file_path.resolve()}")
-    print(f"📦 Tamaño en disco:   {file_path.stat().st_size / 1024:.2f} KB\n")
+    print(f" Archivo analizado: {file_path.resolve()}")
+    print(f" Tamano en disco:   {file_path.stat().st_size / 1024:.2f} KB\n")
 
     # Carga ultrarrápida con Polars
     df = pl.read_parquet(file_path)
 
-    print(f"📌 Dimensiones: {df.shape[0]} filas x {df.shape[1]} columnas")
-    print(f"📋 Esquema de columnas:")
+    print(f" Dimensiones: {df.shape[0]} filas x {df.shape[1]} columnas")
+    print(f" Esquema de columnas:")
     for col_name, dtype in df.schema.items():
-        print(f"   • {col_name:20} -> {dtype}")
+        print(f"   * {col_name:20} -> {dtype}")
 
-    print("\n--- 🌡️ Resumen Estadístico de Variables Físicas ---")
+    print("\n--- Resumen Estadistico de Variables Fisicas ---")
     numeric_cols = [c for c in ["temp_2m_celsius", "precip_6h", "pressure_msl", "wind_u_10m", "wind_v_10m"] if c in df.columns]
     if numeric_cols:
         stats = df.select(
@@ -60,18 +60,18 @@ def explore_parquet(file_path: Path):
         )
         print(stats)
 
-    print("\n--- 🔍 Primeras 5 filas del Dataset ---")
+    print("\n--- Primeras 5 filas del Dataset ---")
     print(df.head(5))
 
     if "forecast_hours" in df.columns:
         horizons = df.select(pl.col("forecast_hours").unique()).sort("forecast_hours").to_series().to_list()
-        print(f"\n⏱️ Horizontes de pronóstico disponibles (horas): {horizons}")
+        print(f"\n Horizontes de pronostico disponibles (horas): {horizons}")
 
     if "ensemble_member" in df.columns:
         members = df.select(pl.col("ensemble_member").unique()).sort("ensemble_member").to_series().to_list()
-        print(f"👥 Miembros del ensamble: {len(members)} miembros ({members[:5]}...)")
+        print(f" Miembros del ensamble: {len(members)} miembros ({members[:5]}...)")
 
-    print("\n✅ Exploración completada 100% offline (Costo $0 GCP).")
+    print("\n[OK] Exploracion completada 100% offline (Costo $0 GCP).")
 
 
 def main():
@@ -80,7 +80,7 @@ def main():
         path = get_target_file(target)
         explore_parquet(path)
     except Exception as e:
-        print(f"❌ Error en exploración: {e}", file=sys.stderr)
+        print(f"[ERROR] Error en exploracion: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

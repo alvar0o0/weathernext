@@ -95,13 +95,13 @@ def save_dataframe_to_parquet(df: pl.DataFrame, cfg: dict) -> Path:
 
     # Guardar archivo versionado
     df.write_parquet(target_path)
-    print(f"💾 Snapshot Parquet guardado con éxito:")
-    print(f"   • Archivo versionado: {target_path.resolve()} ({len(df)} filas, {target_path.stat().st_size / 1024:.1f} KB)")
+    print(f"[STORAGE] Snapshot Parquet guardado con exito:")
+    print(f"   * Archivo versionado: {target_path.resolve()} ({len(df)} filas, {target_path.stat().st_size / 1024:.1f} KB)")
 
     # Crear/actualizar copia de conveniencia 'latest'
     latest_path = out_dir / f"{cfg['file_prefix']}_latest.parquet"
     df.write_parquet(latest_path)
-    print(f"   • Copia de trabajo:   {latest_path.resolve()}")
+    print(f"   * Copia de trabajo:   {latest_path.resolve()}")
 
     return target_path
 
@@ -162,40 +162,40 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     """
     cfg = load_config(config_path)
 
-    print(f"📌 [Configuración de Consulta]")
-    print(f"   • Proyecto Billing GCP: {cfg['project_id']}")
-    print(f"   • Tabla BigQuery:      {cfg['full_table_id']}")
-    print(f"   • Coordenadas:          Latitud {cfg['latitude']}, Longitud {cfg['longitude']} (Radio: {cfg['radius_meters']}m)")
+    print(f"[CONFIG] Parametros de Consulta:")
+    print(f"   * Proyecto Billing GCP: {cfg['project_id']}")
+    print(f"   * Tabla BigQuery:      {cfg['full_table_id']}")
+    print(f"   * Coordenadas:          Latitud {cfg['latitude']}, Longitud {cfg['longitude']} (Radio: {cfg['radius_meters']}m)")
     if cfg["init_time"]:
-        print(f"   • Partición init_time:  {cfg['init_time']}")
-    print(f"   • Límite de seguridad:  {cfg['max_bytes_billed_mb']:.0f} MB proyectados máximos")
+        print(f"   * Particion init_time:  {cfg['init_time']}")
+    print(f"   * Limite de seguridad:  {cfg['max_bytes_billed_mb']:.0f} MB proyectados maximos")
 
     if cfg.get("credentials_file") and Path(cfg["credentials_file"]).exists():
         creds = service_account.Credentials.from_service_account_file(cfg["credentials_file"])
         client = bigquery.Client(project=cfg["project_id"], credentials=creds)
-        print(f"   • Autenticación:        Service Account ({cfg['credentials_file']})")
+        print(f"   * Autenticacion:        Service Account ({cfg['credentials_file']})")
     else:
         client = bigquery.Client(project=cfg["project_id"])
-        print(f"   • Autenticación:        ADC (Sistema por defecto)")
+        print(f"   * Autenticacion:        ADC (Sistema por defecto)")
 
     query = build_sql_query(cfg)
 
     # --- PASO 1: SIMULACIÓN PREVENTIVA (DRY RUN a $0) ---
-    print("\n🔍 [Paso 1: Simulación de Costos (Dry Run)]")
+    print("\n[PASO 1] Simulacion de Costos (Dry Run):")
     dry_run_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
     dry_run_job = client.query(query, job_config=dry_run_config)
     estimated_mb = dry_run_job.total_bytes_processed / (1024 * 1024)
-    print(f"   • Proyección de partición (peor caso sin clustering): {estimated_mb:.2f} MB (~{estimated_mb/1024:.2f} GB)")
-    print(f"   • Escaneo real esperado tras clustering espacial:     ~300 - 400 MB")
-    print(f"   • Costo estimado: $0.00 USD (dentro del tier gratuito de 1 TB/mes)")
+    print(f"   * Proyeccion de particion (sin clustering): {estimated_mb:.2f} MB (~{estimated_mb/1024:.2f} GB)")
+    print(f"   * Escaneo real esperado tras clustering espacial: ~300 - 400 MB")
+    print(f"   * Costo estimado: $0.00 USD (dentro del tier gratuito de 1 TB/mes)")
 
     if estimated_mb > cfg["max_bytes_billed_mb"]:
         raise ValueError(
-            f"⛔ SEGURIDAD: La consulta proyecta {estimated_mb:.2f} MB, lo cual supera el límite configurado de {cfg['max_bytes_billed_mb']} MB. Operación cancelada a $0 costo."
+            f"[SEGURIDAD] La consulta proyecta {estimated_mb:.2f} MB, superando el limite configurado de {cfg['max_bytes_billed_mb']} MB. Operacion cancelada a $0 costo."
         )
 
     if cfg["dry_run_only"]:
-        print("\nℹ️ Modo 'dry_run_only = true' activado. Finalizando simulación sin descargar datos.")
+        print("\n[INFO] Modo 'dry_run_only = true' activado. Finalizando simulacion sin descargar datos.")
         return pl.DataFrame()
 
     # --- PASO 2: EJECUCIÓN SEGURA CON INTERRUPTOR DE CORTE (maximum_bytes_billed) ---
@@ -206,7 +206,7 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     )
 
     try:
-        print("\n⏳ [Paso 2: Extracción desde BigQuery]")
+        print("\n[PASO 2] Extraccion desde BigQuery:")
         query_job = client.query(query, job_config=exec_config)
 
         # Streaming de datos columnar vía Apache Arrow (Zero-Copy) -> Polars
@@ -214,22 +214,36 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
         df = pl.from_arrow(arrow_table)
 
         actual_mb = (query_job.total_bytes_processed or 0) / (1024 * 1024)
-        print(f"✅ Consulta completada exitosamente.")
-        print(f"   • Escaneo real reportado: {actual_mb:.2f} MB")
-        print(f"   • Filas recibidas:        {len(df)}")
+        billed_mb = (query_job.total_bytes_billed or 0) / (1024 * 1024)
+        print(f"[OK] Consulta completada exitosamente.")
+        print(f"   * Escaneo real reportado: {actual_mb:.2f} MB (Facturado: {billed_mb:.2f} MB)")
+        print(f"   * Filas recibidas:        {len(df)}")
+
+        # --- REGISTRO EN MEDIDOR LOCAL (SQLite) ---
+        try:
+            from usage_tracker import record_local_usage
+            record_local_usage(
+                job_id=query_job.job_id,
+                bytes_billed=query_job.total_bytes_billed,
+                bytes_processed=query_job.total_bytes_processed,
+                query_type="weathernext_extraction",
+            )
+            print(f"   * Medidor de consumo:     Job {query_job.job_id[:8]} registrado en SQLite (data/usage.db)")
+        except Exception as tracker_err:
+            print(f"   [AVISO] Medidor de consumo: {tracker_err}", file=sys.stderr)
 
         # --- PASO 3: PERSISTENCIA LOCAL EN PARQUET ---
         if cfg["auto_save_parquet"] and not df.is_empty():
-            print("\n📦 [Paso 3: Persistencia Local en Parquet]")
+            print("\n[PASO 3] Persistencia Local en Parquet:")
             save_dataframe_to_parquet(df, cfg)
 
         return df
 
     except GoogleAPIError as err:
-        print(f"❌ Error al consultar BigQuery: {err}", file=sys.stderr)
+        print(f"[ERROR] Error al consultar BigQuery: {err}", file=sys.stderr)
         raise
     except Exception as err:
-        print(f"❌ Error inesperado en el pipeline: {err}", file=sys.stderr)
+        print(f"[ERROR] Error inesperado en el pipeline: {err}", file=sys.stderr)
         raise
 
 
@@ -238,7 +252,7 @@ def main():
     try:
         df = fetch_weather_data(config_file)
         if not df.is_empty():
-            print("\n--- 📊 Vista Previa de los Datos (Polars DataFrame) ---")
+            print("\n--- Vista Previa de los Datos (Polars DataFrame) ---")
             print(df.head(10))
             print(f"\nDimensiones: {df.shape[0]} filas x {df.shape[1]} columnas")
     except Exception as e:

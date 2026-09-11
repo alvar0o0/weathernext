@@ -8,3 +8,14 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local Data Lake & Databases
+data/
+*.parquet
+*.duckdb
+*.db
+
+# Local Project Specs & Notes
+PROJECT.md
+SPECS.md
+

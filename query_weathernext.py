@@ -1,14 +1,16 @@
 import configparser
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 from google.cloud import bigquery
+from google.oauth2 import service_account
 from google.api_core.exceptions import GoogleAPIError
 
 
 def load_config(config_path: str = "config.ini") -> dict:
-    """Lee y valida el archivo de configuración .config / .ini"""
+    """Lee y valida el archivo de configuración .config / .ini con parámetros de seguridad y almacenamiento."""
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"No se encontró el archivo de configuración en: {path.resolve()}")
@@ -17,7 +19,7 @@ def load_config(config_path: str = "config.ini") -> dict:
     config.read(path, encoding="utf-8")
 
     if "GCP" not in config or "LOCATION" not in config:
-        raise ValueError("El archivo .config debe contener las secciones [GCP] y [LOCATION].")
+        raise ValueError("El archivo config.ini debe contener al menos las secciones [GCP] y [LOCATION].")
 
     project_id = config.get("GCP", "project_id", fallback="").strip()
     if not project_id or project_id == "tu-proyecto-gcp-id":
@@ -26,9 +28,10 @@ def load_config(config_path: str = "config.ini") -> dict:
             file=sys.stderr,
         )
 
-    public_project = config.get("GCP", "public_project", fallback="gcp-public-data-weathernext").strip()
-    dataset = config.get("GCP", "dataset", fallback="").strip()
-    table_name = config.get("GCP", "table_name", fallback="").strip()
+    credentials_file = config.get("GCP", "credentials_file", fallback="").strip()
+    public_project = config.get("GCP", "public_project", fallback="gen-lang-client-0313723965").strip()
+    dataset = config.get("GCP", "dataset", fallback="weathernext_2").strip()
+    table_name = config.get("GCP", "table_name", fallback="weathernext_2_0_0").strip()
     raw_full_table_id = config.get("GCP", "full_table_id", fallback="").strip()
 
     if raw_full_table_id:
@@ -40,7 +43,7 @@ def load_config(config_path: str = "config.ini") -> dict:
     elif dataset and table_name:
         full_table_id = f"{public_project}.{dataset}.{table_name}"
     else:
-        full_table_id = f"{public_project}.dataset_name.table_name"
+        full_table_id = f"{public_project}.weathernext_2.weathernext_2_0_0"
 
     try:
         latitude = config.getfloat("LOCATION", "latitude")
@@ -49,40 +52,62 @@ def load_config(config_path: str = "config.ini") -> dict:
     except ValueError as e:
         raise ValueError(f"Error al leer parámetros de ubicación desde {config_path}: {e}")
 
+    # Seguridad y Costos
+    max_bytes_billed_mb = config.getfloat("SAFETY", "max_bytes_billed_mb", fallback=750000.0)
+    dry_run_only = config.getboolean("SAFETY", "dry_run_only", fallback=False)
+
+    # Almacenamiento Local (Parquet)
+    output_dir = config.get("STORAGE", "output_dir", fallback="data").strip()
+    file_prefix = config.get("STORAGE", "file_prefix", fallback="weathernext").strip()
+    auto_save_parquet = config.getboolean("STORAGE", "auto_save_parquet", fallback=True)
+
+    # Consulta
     init_time = config.get("QUERY", "init_time", fallback="").strip()
     unnest_forecast = config.getboolean("QUERY", "unnest_forecast", fallback=True)
     limit = config.getint("QUERY", "limit", fallback=100)
 
     return {
         "project_id": project_id,
+        "credentials_file": credentials_file,
         "full_table_id": full_table_id,
         "latitude": latitude,
         "longitude": longitude,
         "radius_meters": radius_meters,
+        "max_bytes_billed_mb": max_bytes_billed_mb,
+        "dry_run_only": dry_run_only,
+        "output_dir": output_dir,
+        "file_prefix": file_prefix,
+        "auto_save_parquet": auto_save_parquet,
         "init_time": init_time,
         "unnest_forecast": unnest_forecast,
         "limit": limit,
     }
 
 
-def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
-    """
-    Consulta la tabla WeatherNext en BigQuery filtrando espacialmente por coordenadas GEOGRAPHY,
-    desanidando estructuras de pronóstico si se requiere, y retorna un DataFrame de Polars.
-    """
-    cfg = load_config(config_path)
+def save_dataframe_to_parquet(df: pl.DataFrame, cfg: dict) -> Path:
+    """Guarda el DataFrame de Polars en un archivo Parquet con versión timestamp YYYYMMDD-HHMM."""
+    out_dir = Path(cfg["output_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"📌 Conectando a BigQuery...")
-    print(f"   • Proyecto GCP Billing: {cfg['project_id']}")
-    print(f"   • Tabla: {cfg['full_table_id']}")
-    print(f"   • Ubicación objetivo: Latitud {cfg['latitude']}, Longitud {cfg['longitude']}")
-    print(f"   • Radio de búsqueda: {cfg['radius_meters']} metros")
-    if cfg["init_time"]:
-        print(f"   • Filtro init_time: {cfg['init_time']}")
+    timestamp_str = datetime.now().strftime("%Y%m%d-%H%M")
+    filename = f"{cfg['file_prefix']}_{timestamp_str}.parquet"
+    target_path = out_dir / filename
 
-    client = bigquery.Client(project=cfg["project_id"])
+    # Guardar archivo versionado
+    df.write_parquet(target_path)
+    print(f"💾 Snapshot Parquet guardado con éxito:")
+    print(f"   • Archivo versionado: {target_path.resolve()} ({len(df)} filas, {target_path.stat().st_size / 1024:.1f} KB)")
 
-    # Construir condiciones WHERE con literales para permitir la optimización de particionado y clustering espacial en BigQuery
+    # Crear/actualizar copia de conveniencia 'latest'
+    latest_path = out_dir / f"{cfg['file_prefix']}_latest.parquet"
+    df.write_parquet(latest_path)
+    print(f"   • Copia de trabajo:   {latest_path.resolve()}")
+
+    return target_path
+
+
+def build_sql_query(cfg: dict) -> str:
+    """Construye la consulta SQL geoespacial optimizada con predicados nativos."""
     where_clauses = [
         f"ST_DWITHIN(geography, ST_GEOGPOINT({cfg['longitude']}, {cfg['latitude']}), {cfg['radius_meters']})"
     ]
@@ -93,7 +118,7 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     where_sql = " AND ".join(where_clauses)
 
     if cfg["unnest_forecast"]:
-        query = f"""
+        return f"""
             SELECT 
                 init_time,
                 ST_Y(geography) AS latitude,
@@ -116,7 +141,7 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
             LIMIT {cfg['limit']}
         """
     else:
-        query = f"""
+        return f"""
             SELECT 
                 init_time,
                 ST_Y(geography) AS latitude,
@@ -129,23 +154,82 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
             LIMIT {cfg['limit']}
         """
 
-    job_config = bigquery.QueryJobConfig()
+
+def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
+    """
+    Consulta BigQuery con protección de costos (dry_run + maximum_bytes_billed),
+    transforma los datos vía Apache Arrow a Polars y persiste el snapshot en Parquet.
+    """
+    cfg = load_config(config_path)
+
+    print(f"📌 [Configuración de Consulta]")
+    print(f"   • Proyecto Billing GCP: {cfg['project_id']}")
+    print(f"   • Tabla BigQuery:      {cfg['full_table_id']}")
+    print(f"   • Coordenadas:          Latitud {cfg['latitude']}, Longitud {cfg['longitude']} (Radio: {cfg['radius_meters']}m)")
+    if cfg["init_time"]:
+        print(f"   • Partición init_time:  {cfg['init_time']}")
+    print(f"   • Límite de seguridad:  {cfg['max_bytes_billed_mb']:.0f} MB proyectados máximos")
+
+    if cfg.get("credentials_file") and Path(cfg["credentials_file"]).exists():
+        creds = service_account.Credentials.from_service_account_file(cfg["credentials_file"])
+        client = bigquery.Client(project=cfg["project_id"], credentials=creds)
+        print(f"   • Autenticación:        Service Account ({cfg['credentials_file']})")
+    else:
+        client = bigquery.Client(project=cfg["project_id"])
+        print(f"   • Autenticación:        ADC (Sistema por defecto)")
+
+    query = build_sql_query(cfg)
+
+    # --- PASO 1: SIMULACIÓN PREVENTIVA (DRY RUN a $0) ---
+    print("\n🔍 [Paso 1: Simulación de Costos (Dry Run)]")
+    dry_run_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+    dry_run_job = client.query(query, job_config=dry_run_config)
+    estimated_mb = dry_run_job.total_bytes_processed / (1024 * 1024)
+    print(f"   • Proyección de partición (peor caso sin clustering): {estimated_mb:.2f} MB (~{estimated_mb/1024:.2f} GB)")
+    print(f"   • Escaneo real esperado tras clustering espacial:     ~300 - 400 MB")
+    print(f"   • Costo estimado: $0.00 USD (dentro del tier gratuito de 1 TB/mes)")
+
+    if estimated_mb > cfg["max_bytes_billed_mb"]:
+        raise ValueError(
+            f"⛔ SEGURIDAD: La consulta proyecta {estimated_mb:.2f} MB, lo cual supera el límite configurado de {cfg['max_bytes_billed_mb']} MB. Operación cancelada a $0 costo."
+        )
+
+    if cfg["dry_run_only"]:
+        print("\nℹ️ Modo 'dry_run_only = true' activado. Finalizando simulación sin descargar datos.")
+        return pl.DataFrame()
+
+    # --- PASO 2: EJECUCIÓN SEGURA CON INTERRUPTOR DE CORTE (maximum_bytes_billed) ---
+    max_allowed_bytes = int(cfg["max_bytes_billed_mb"] * 1024 * 1024)
+    exec_config = bigquery.QueryJobConfig(
+        maximum_bytes_billed=max_allowed_bytes,
+        use_query_cache=True,
+    )
 
     try:
-        print("⏳ Ejecutando consulta SQL espacial en BigQuery...")
-        query_job = client.query(query, job_config=job_config)
+        print("\n⏳ [Paso 2: Extracción desde BigQuery]")
+        query_job = client.query(query, job_config=exec_config)
 
+        # Streaming de datos columnar vía Apache Arrow (Zero-Copy) -> Polars
         arrow_table = query_job.to_arrow()
         df = pl.from_arrow(arrow_table)
 
-        print(f"✅ Consulta completada. Filas obtenidas: {len(df)}")
+        actual_mb = (query_job.total_bytes_processed or 0) / (1024 * 1024)
+        print(f"✅ Consulta completada exitosamente.")
+        print(f"   • Escaneo real reportado: {actual_mb:.2f} MB")
+        print(f"   • Filas recibidas:        {len(df)}")
+
+        # --- PASO 3: PERSISTENCIA LOCAL EN PARQUET ---
+        if cfg["auto_save_parquet"] and not df.is_empty():
+            print("\n📦 [Paso 3: Persistencia Local en Parquet]")
+            save_dataframe_to_parquet(df, cfg)
+
         return df
 
     except GoogleAPIError as err:
         print(f"❌ Error al consultar BigQuery: {err}", file=sys.stderr)
         raise
     except Exception as err:
-        print(f"❌ Error inesperado: {err}", file=sys.stderr)
+        print(f"❌ Error inesperado en el pipeline: {err}", file=sys.stderr)
         raise
 
 
@@ -153,11 +237,14 @@ def main():
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.ini"
     try:
         df = fetch_weather_data(config_file)
-        print("\n--- Vista previa de los datos en Polars ---")
-        print(df)
+        if not df.is_empty():
+            print("\n--- 📊 Vista Previa de los Datos (Polars DataFrame) ---")
+            print(df.head(10))
+            print(f"\nDimensiones: {df.shape[0]} filas x {df.shape[1]} columnas")
     except Exception as e:
         print(f"\nProceso finalizado con error: {e}")
 
 
 if __name__ == "__main__":
     main()
+

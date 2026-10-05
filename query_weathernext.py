@@ -69,6 +69,9 @@ def load_config(config_path: str = "config.ini") -> dict:
     return {
         "project_id": project_id,
         "credentials_file": credentials_file,
+        "public_project": public_project,
+        "dataset": dataset,
+        "table_name": table_name,
         "full_table_id": full_table_id,
         "latitude": latitude,
         "longitude": longitude,
@@ -158,6 +161,40 @@ def build_sql_query(cfg: dict) -> str:
         """
 
 
+def resolve_latest_init_time(client: bigquery.Client, cfg: dict) -> str:
+    """Detecta automáticamente la corrida más reciente de WeatherNext en BigQuery."""
+    print("   * [AUTO-RESOLVE] Detectando corrida mas reciente en BigQuery...")
+    parts_query = f"""
+        SELECT partition_id
+        FROM `{cfg['public_project']}.{cfg['dataset']}.INFORMATION_SCHEMA.PARTITIONS`
+        WHERE table_name = '{cfg['table_name']}'
+          AND partition_id NOT IN ('__NULL__', '__UNPARTITIONED__')
+        ORDER BY partition_id DESC
+        LIMIT 1
+    """
+    job = client.query(parts_query)
+    rows = list(job)
+    if not rows:
+        raise ValueError("No se encontraron particiones activas en BigQuery.")
+    latest_part = rows[0].partition_id
+    date_str = f"{latest_part[:4]}-{latest_part[4:6]}-{latest_part[6:8]}"
+
+    init_query = f"""
+        SELECT MAX(init_time) as max_init
+        FROM `{cfg['full_table_id']}`
+        WHERE DATE(init_time) = '{date_str}'
+    """
+    job2 = client.query(init_query)
+    rows2 = list(job2)
+    max_init = rows2[0].max_init
+    if not max_init:
+        raise ValueError(f"No se encontró un init_time válido para la partición {date_str}.")
+
+    formatted_init = max_init.strftime("%Y-%m-%d %H:%M:%S+00")
+    print(f"   * [AUTO-RESOLVE] Corrida mas reciente encontrada: {formatted_init}")
+    return formatted_init
+
+
 def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     """
     Consulta BigQuery con protección de costos (dry_run + maximum_bytes_billed),
@@ -169,8 +206,6 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     print(f"   * Proyecto Billing GCP: {cfg['project_id']}")
     print(f"   * Tabla BigQuery:      {cfg['full_table_id']}")
     print(f"   * Coordenadas:          Latitud {cfg['latitude']}, Longitud {cfg['longitude']} (Radio: {cfg['radius_meters']}m)")
-    if cfg["init_time"]:
-        print(f"   * Particion init_time:  {cfg['init_time']}")
     print(f"   * Limite de seguridad:  {cfg['max_bytes_billed_mb']:.0f} MB proyectados maximos")
 
     if cfg.get("credentials_file") and Path(cfg["credentials_file"]).exists():
@@ -180,6 +215,12 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     else:
         client = bigquery.Client(project=cfg["project_id"])
         print(f"   * Autenticacion:        ADC (Sistema por defecto)")
+
+    # Detección automática de la última corrida si init_time es 'latest' o está vacío
+    if cfg["init_time"].lower() in ("", "latest", "auto"):
+        cfg["init_time"] = resolve_latest_init_time(client, cfg)
+    
+    print(f"   * Particion init_time:  {cfg['init_time']}")
 
     query = build_sql_query(cfg)
 

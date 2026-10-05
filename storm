@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# CLI Wrapper para el analizador de temporales de WeatherNext
+set -e
+exec uv run python storm_tui.py "$@"

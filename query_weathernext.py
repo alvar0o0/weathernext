@@ -131,8 +131,11 @@ def build_sql_query(cfg: dict) -> str:
                 ROUND(ens.`2m_temperature` - 273.15, 2) AS temp_2m_celsius,
                 ens.`10m_u_component_of_wind` AS wind_u_10m,
                 ens.`10m_v_component_of_wind` AS wind_v_10m,
+                ROUND(SQRT(POW(ens.`10m_u_component_of_wind`, 2) + POW(ens.`10m_v_component_of_wind`, 2)) * 3.6, 2) AS wind_speed_kmh,
                 ens.mean_sea_level_pressure AS pressure_msl,
-                ens.total_precipitation_6hr AS precip_6h
+                ROUND(ens.mean_sea_level_pressure / 100.0, 2) AS pressure_hpa,
+                ens.total_precipitation_6hr AS precip_6h,
+                ROUND(GREATEST(0.0, ens.total_precipitation_6hr) * 1000.0, 2) AS precip_6h_mm
             FROM `{cfg['full_table_id']}`,
             UNNEST(forecast) AS f,
             UNNEST(f.ensemble) AS ens

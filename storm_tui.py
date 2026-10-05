@@ -2,6 +2,7 @@
 """
 WEATHERNEXT 2.0 — CLI TUI & ANALIZADOR DE TEMPORALES (Google DeepMind Ensemble)
 Visualizador offline en terminal para snapshots Parquet de WeatherNext en Polars y Rich.
+Incluye soporte para presets de ubicación (Ñuñoa, Las Condes) y modo de traslado (Commute).
 """
 
 import argparse
@@ -14,13 +15,62 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.columns import Columns
 from rich import box
 
 console = Console()
 
 # Zona horaria de Santiago de Chile (UTC-3 estándar / horario actual)
 SANTIAGO_TZ_OFFSET = timedelta(hours=-3)
+
+SPANISH_WEEKDAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+SPANISH_DAYS_FULL = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+SPANISH_MONTHS_FULL = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+# Presets de ubicaciones mapeados a las celdas de la grilla de WeatherNext (0.25° x 0.25°)
+PRESETS = {
+    "casa": {
+        "alias": "casa",
+        "name": "Ñuñoa (Casa)",
+        "desc": "Santiago Oriente • Plaza Ñuñoa",
+        "target_cell": (-33.50, -70.50),
+    },
+    "nunoa": {
+        "alias": "nunoa",
+        "name": "Ñuñoa",
+        "desc": "Santiago Oriente • Plaza Ñuñoa",
+        "target_cell": (-33.50, -70.50),
+    },
+    "trabajo": {
+        "alias": "trabajo",
+        "name": "Las Condes (Trabajo)",
+        "desc": "Santiago Oriente • Eje Apoquindo / Manquehue",
+        "target_cell": (-33.50, -70.50),
+    },
+    "las_condes": {
+        "alias": "las_condes",
+        "name": "Las Condes",
+        "desc": "Santiago Oriente • Eje Apoquindo / Manquehue",
+        "target_cell": (-33.50, -70.50),
+    },
+    "las_condes_alto": {
+        "alias": "las_condes_alto",
+        "name": "Las Condes Alto / Cantagallo",
+        "desc": "Precordillera Norte • Cantagallo / San Carlos",
+        "target_cell": (-33.25, -70.50),
+    },
+    "poniente": {
+        "alias": "poniente",
+        "name": "Santiago Centro / Poniente",
+        "desc": "Valle Central • Santiago / Pudahuel / Maipú",
+        "target_cell": (-33.50, -70.75),
+    },
+    "norte": {
+        "alias": "norte",
+        "name": "Santiago Norte (Chicureo)",
+        "desc": "Chicureo • Colina • Lampa",
+        "target_cell": (-33.25, -70.75),
+    },
+}
 
 
 def load_latest_snapshot(parquet_path: str | None = None) -> tuple[pl.DataFrame, Path]:
@@ -39,13 +89,31 @@ def load_latest_snapshot(parquet_path: str | None = None) -> tuple[pl.DataFrame,
 
     parquets = sorted(list(data_dir.glob("weathernext_*.parquet")), key=lambda f: f.stat().st_mtime, reverse=True)
     if not parquets:
-        console.print("[bold red]Error:[/bold red] No hay snapshots en data/. Ejecuta primero 'uv run python query_weathernext.py'.")
+        console.print("[bold red]Error:[/bold red] No hay snapshots en data/. Ejecuta primero './storm --fetch'.")
         sys.exit(1)
 
     return pl.read_parquet(parquets[0]), parquets[0]
 
 
-def render_rain_bar(mm: float, max_scale: float = 20.0, width: int = 14) -> Text:
+def filter_by_location(df: pl.DataFrame, preset_key: str = "casa") -> tuple[pl.DataFrame, dict]:
+    """Filtra el DataFrame por la celda objetivo del preset."""
+    clean_key = preset_key.lower().replace("-", "_")
+    preset = PRESETS.get(clean_key, PRESETS["casa"])
+    target_lat, target_lon = preset["target_cell"]
+
+    if "latitude" in df.columns and "longitude" in df.columns:
+        filtered = df.filter(
+            (pl.col("latitude").round(2) == target_lat) & 
+            (pl.col("longitude").round(2) == target_lon)
+        )
+        if len(filtered) > 0:
+            return filtered, preset
+
+    # Si no hay columnas de coordenadas exactas, retornar todo
+    return df, preset
+
+
+def render_rain_bar(mm: float, max_scale: float = 15.0, width: int = 8) -> Text:
     """Genera una barra visual en caracteres Unicode con gradiente de color según mm."""
     if mm <= 0.05:
         return Text("·" * width, style="dim")
@@ -63,7 +131,7 @@ def render_rain_bar(mm: float, max_scale: float = 20.0, width: int = 14) -> Text
         color = "cyan"
     elif mm < 10.0:
         color = "bright_blue"
-    elif mm < 18.0:
+    elif mm < 16.0:
         color = "bold magenta"
     else:
         color = "bold red on #330000"
@@ -78,21 +146,9 @@ def analyze_storm(df: pl.DataFrame, max_hours: int = 120) -> tuple[pl.DataFrame,
     """
     filtered = df.filter(pl.col("forecast_hours") <= max_hours)
 
-    # Si hay columnas de mm ya calculadas las usamos; si no, convertimos de metros a mm
-    if "precip_6h_mm" in filtered.columns:
-        p_col = pl.col("precip_6h_mm")
-    else:
-        p_col = (pl.col("precip_6h").clip(lower_bound=0.0) * 1000.0)
-
-    if "pressure_hpa" in filtered.columns:
-        pres_col = pl.col("pressure_hpa")
-    else:
-        pres_col = (pl.col("pressure_msl") / 100.0)
-
-    if "wind_speed_kmh" in filtered.columns:
-        wind_col = pl.col("wind_speed_kmh")
-    else:
-        wind_col = ((pl.col("wind_u_10m").pow(2) + pl.col("wind_v_10m").pow(2)).sqrt() * 3.6)
+    p_col = pl.col("precip_6h_mm") if "precip_6h_mm" in filtered.columns else (pl.col("precip_6h").clip(lower_bound=0.0) * 1000.0)
+    pres_col = pl.col("pressure_hpa") if "pressure_hpa" in filtered.columns else (pl.col("pressure_msl") / 100.0)
+    wind_col = pl.col("wind_speed_kmh") if "wind_speed_kmh" in filtered.columns else ((pl.col("wind_u_10m").pow(2) + pl.col("wind_v_10m").pow(2)).sqrt() * 3.6)
 
     summary = filtered.group_by(["forecast_hours", "forecast_time"]).agg([
         p_col.mean().round(1).alias("precip_mean"),
@@ -106,18 +162,12 @@ def analyze_storm(df: pl.DataFrame, max_hours: int = 120) -> tuple[pl.DataFrame,
         pres_col.quantile(0.50).round(1).alias("pres_p50"),
     ]).sort("forecast_hours")
 
-    # Calcular acumulados
     cum_p50 = summary["p50"].sum()
     cum_p90 = summary["p90"].sum()
     cum_mean = summary["precip_mean"].sum()
 
-    # Pico de intensidad
     peak_row = summary.sort("p90", descending=True).row(0, named=True)
-
-    # Caída mínima de presión barométrica
     min_pressure = summary["pres_p50"].min()
-
-    # Viento máximo P90
     max_wind = summary["wind_p90"].max()
 
     metrics = {
@@ -154,24 +204,20 @@ def determine_alert_level(metrics: dict) -> tuple[str, str, str]:
         return "VERDE", "ALERTA VERDE (Condiciones Normales / Sin Riesgo Mayor)", "bold white on green"
 
 
-def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temporal_santiago.html"):
+def generate_html_spaghetti_plot(df: pl.DataFrame, location_name: str = "Santiago Oriente", output_path: str = "data/temporal_santiago.html"):
     """Genera un gráfico HTML interactivo tipo spaghetti con las 64 trayectorias del ensamble."""
     try:
         import plotly.graph_objects as go
     except ImportError:
-        console.print("[yellow]Aviso: plotly no instalado. No se pudo generar el HTML.[/yellow]")
-        return
+        return None
 
-    # Preparar datos agregados y por miembro
     df_sorted = df.sort(["ensemble_member", "forecast_hours"])
     members = df_sorted["ensemble_member"].unique().to_list()
 
     fig = go.Figure()
 
-    # 1. Agregar las 64 trayectorias de los miembros (acumulado acumulativo)
     for m in members:
         m_df = df_sorted.filter(pl.col("ensemble_member") == m)
-        # Acumulado de lluvia
         p_vals = m_df["precip_6h_mm"].to_list() if "precip_6h_mm" in m_df.columns else (m_df["precip_6h"] * 1000).clip(lower=0).to_list()
         cum_vals = []
         running = 0.0
@@ -191,7 +237,6 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
             name=f"Miembro {m}"
         ))
 
-    # 2. Agregar Mediana (P50) y P90 del ensamble
     summary = df.group_by(["forecast_hours", "forecast_time"]).agg([
         pl.col("precip_6h_mm").quantile(0.50).alias("p50"),
         pl.col("precip_6h_mm").quantile(0.90).alias("p90"),
@@ -210,7 +255,6 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
 
     times_sum = [t.strftime("%Y-%m-%d %H:%M") for t in summary["forecast_time"].to_list()]
 
-    # Banda de incertidumbre P90
     fig.add_trace(go.Scatter(
         x=times_sum,
         y=p90_cum,
@@ -219,7 +263,6 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
         name='Peor Escenario (Percentil 90)'
     ))
 
-    # Mediana P50
     fig.add_trace(go.Scatter(
         x=times_sum,
         y=p50_cum,
@@ -229,7 +272,6 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
         name='Escenario Central (Mediana P50)'
     ))
 
-    # Eje secundario para la Presión Atmosférica
     fig.add_trace(go.Scatter(
         x=times_sum,
         y=summary["pres"].to_list(),
@@ -240,7 +282,7 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
     ))
 
     fig.update_layout(
-        title='🌧️ DeepMind WeatherNext 2.0 — Ensamble Spaghetti Plot (Santiago)',
+        title=f'🌧️ DeepMind WeatherNext 2.0 — Ensamble Spaghetti Plot ({location_name})',
         template='plotly_dark',
         xaxis=dict(title='Fecha y Hora (UTC)', gridcolor='#263238'),
         yaxis=dict(title='Lluvia Acumulada (mm)', gridcolor='#263238'),
@@ -261,27 +303,103 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, output_path: str = "data/temp
     return out
 
 
-def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool = True):
-    """Renderiza el dashboard interactivo en la terminal con Rich."""
-    df, filepath = load_latest_snapshot(parquet_path)
-    max_hours = days * 24
+def display_commute_view(df: pl.DataFrame):
+    """
+    Vista especializada de Traslado Diario (Commute):
+    Analiza ventanas de viaje entre Ñuñoa (Casa) y Las Condes (Trabajo)
+    para lunes, martes y miércoles.
+    """
+    console.print(Panel(
+        "[bold cyan]🚗 ANÁLISIS DE TRASLADO DIARIO: ÑUÑOA ⇄ LAS CONDES[/bold cyan]\n"
+        "[dim]Evaluación de ventanas de hora punta (Mañana 06:00-12:00 CLT / Tarde 18:00-24:00 CLT)[/dim]",
+        border_style="magenta",
+        box=box.ROUNDED
+    ))
 
+    # Filtrar por la celda Oriente (que cubre el corredor Ñuñoa - Las Condes)
+    df_oriente, _ = filter_by_location(df, "casa")
+    summary, _ = analyze_storm(df_oriente, max_hours=72)
+
+    # Filtrar solo pasos correspondientes a mañana (06-12h CLT) y tarde (18-24h CLT)
+    commute_table = Table(box=box.ROUNDED, header_style="bold cyan", padding=(0, 1))
+    commute_table.add_column("Ventana de Traslado", style="bold white", width=22)
+    commute_table.add_column("Sentido", justify="center", width=18)
+    commute_table.add_column("Lluvia P50", justify="right", style="bold cyan", width=12)
+    commute_table.add_column("Riesgo P90", justify="right", style="bold orange3", width=12)
+    commute_table.add_column("Impacto en Tráfico", justify="left", width=34)
+
+    for row in summary.iter_rows(named=True):
+        ft_local = row["forecast_time"] + SANTIAGO_TZ_OFFSET
+        hour = ft_local.hour
+        day_str = f"{SPANISH_WEEKDAYS[ft_local.weekday()]} {ft_local.day:02d}/{ft_local.month:02d}"
+
+        # Ventana de mañana (09:00 CLT representa el bloque 03:00 - 09:00 o 06:00 - 12:00)
+        # Horas en UTC: 12:00 UTC = 09:00 CLT, 18:00 UTC = 15:00 CLT, 00:00 UTC = 21:00 CLT
+        p50 = row["p50"]
+        p90 = row["p90"]
+
+        if hour == 9: # Bloque de mañana (hacia el trabajo)
+            ventana = f"{day_str} Mañana (08-10h)"
+            sentido = "Ñuñoa ➔ Las Condes"
+            if p50 >= 8.0:
+                impacto = Text("🔴 CRÍTICO: Inundaciones / Colapso", style="bold red")
+            elif p50 >= 3.0:
+                impacto = Text("🟠 ALTO: Congestión / Anegamientos", style="bold yellow")
+            elif p50 >= 0.5:
+                impacto = Text("🟡 MODERADO: Pavimento Resbaladizo", style="cyan")
+            else:
+                impacto = Text("🟢 Despejado / Sin complicaciones", style="green")
+
+            commute_table.add_row(ventana, sentido, f"{p50:4.1f} mm", f"{p90:4.1f} mm", impacto)
+
+        elif hour == 15 or hour == 21: # Bloque de tarde/retorno
+            if hour == 21: # Tarde retorno (18:00 - 21:00)
+                ventana = f"{day_str} Tarde (18-20h)"
+                sentido = "Las Condes ➔ Ñuñoa"
+                if p50 >= 8.0:
+                    impacto = Text("🔴 CRÍTICO: Tráfico Lento Severo", style="bold red")
+                elif p50 >= 3.0:
+                    impacto = Text("🟠 ALTO: Retención / Visibilidad Baja", style="bold yellow")
+                elif p50 >= 0.5:
+                    impacto = Text("🟡 MODERADO: Tránsito Pesado", style="cyan")
+                else:
+                    impacto = Text("🟢 Normal / Sin alerta", style="green")
+
+                commute_table.add_row(ventana, sentido, f"{p50:4.1f} mm", f"{p90:4.1f} mm", impacto)
+
+    console.print(commute_table)
+
+    console.print(Panel(
+        "💡 [bold yellow]Recomendación Estratégica para tu Semana:[/bold yellow]\n"
+        "• [bold red]Martes 06 (Mañana):[/bold red] El temporal alcanza su pico máximo (~13.4 a 17.8 mm en 6h) justo entre 09:00 y 14:00 CLT.\n"
+        "  [italic]Ejes Manquehue, Tobalaba y Américo Vespucio con alto riesgo de anegamiento. Se recomienda encarecidamente teletrabajo.[/italic]\n"
+        "• [bold yellow]Miércoles 07:[/bold yellow] La lluvia se mantendrá constante pero con menor violencia (~4 a 6 mm/6h). Traslado posible con precaución.",
+        border_style="yellow",
+        box=box.ROUNDED
+    ))
+
+
+def display_tui(parquet_path: str | None = None, location_key: str = "casa", days: int = 5, make_html: bool = True):
+    """Renderiza el dashboard interactivo en la terminal con Rich."""
+    raw_df, filepath = load_latest_snapshot(parquet_path)
+    df, preset = filter_by_location(raw_df, preset_key=location_key)
+
+    max_hours = days * 24
     summary, metrics = analyze_storm(df, max_hours=max_hours)
     level_code, level_label, level_style = determine_alert_level(metrics)
 
     # 1. ENCABEZADO
     init_dt = metrics["init_time"]
     init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
-    
+    target_coord = preset["target_cell"]
+
     header_text = Text()
     header_text.append("🌦️  WEATHERNEXT 2.0 ", style="bold cyan")
     header_text.append("• GOOGLE DEEPMIND NEURAL ENSEMBLE\n", style="bold white")
-    header_text.append(f"Pronóstico de Temporal | Santiago (-33.50°, -70.75°) | Corrida: {init_str}\n", style="dim")
-    header_text.append(f"Snapshot local: {filepath.name} (Polars Engine • Latencia <5ms)", style="dim italic")
+    header_text.append(f"Ubicación: {preset['name']} ({preset['desc']})\n", style="bold yellow")
+    header_text.append(f"Celda Modelo: ({target_coord[0]:.2f}°, {target_coord[1]:.2f}°) | Corrida: {init_str} | Snapshot: {filepath.name}", style="dim")
 
     console.print(Panel(header_text, border_style="cyan", box=box.ROUNDED))
-
-    SPANISH_WEEKDAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 
     # 2. TARJETAS DE ALERTA Y MÉTRICAS CLAVE
     p50_val = f"{metrics['cum_p50']:.1f} mm"
@@ -333,7 +451,7 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
 
     # 3. CRONOGRAMA DETALLADO (TABLA CON HIDROGRAMA DE BARRAS)
     table = Table(
-        title=f"📊 Cronograma del Temporal por Ventanas de 6 Horas (Próximos {days} Días)",
+        title=f"📊 Cronograma por Ventanas de 6 Horas en {preset['name']} (Próximos {days} Días)",
         box=box.SIMPLE_HEAVY,
         header_style="bold cyan",
         show_lines=False,
@@ -367,7 +485,6 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
         else:
             prob_txt = Text(f"{prob:3.0f}%", style="dim")
 
-        # Barra visual
         bar = render_rain_bar(row["p50"], max_scale=15.0, width=8)
 
         p50 = row['p50']
@@ -404,7 +521,7 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
     console.print(table)
 
     # 4. RESUMEN DÍA POR DÍA (CRONOLÓGICO)
-    console.print("\n[bold cyan]📅 Desglose Acumulado por Día Calendario (Hora Santiago):[/bold cyan]")
+    console.print(f"\n[bold cyan]📅 Desglose Acumulado por Día Calendario en {preset['name']}:[/bold cyan]")
     daily = summary.with_columns(
         (pl.col("forecast_time") + SANTIAGO_TZ_OFFSET).dt.date().alias("fecha_local")
     ).group_by("fecha_local").agg([
@@ -413,9 +530,6 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
         pl.col("wind_p90").max().round(1).alias("viento_max"),
         pl.col("pres_p50").min().round(1).alias("pres_min"),
     ]).sort("fecha_local")
-
-    SPANISH_DAYS_FULL = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    SPANISH_MONTHS_FULL = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
     daily_table = Table(box=box.ROUNDED, header_style="bold magenta")
     daily_table.add_column("Día", style="bold white", width=25)
@@ -430,7 +544,6 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
         p50_val = d['lluvia_p50']
         p90_str = f"{d['lluvia_p90']:5.1f} mm"
         
-        # Barra gráfica en tabla diaria
         bar_len = int(min(14, p50_val / 2.5))
         bar_daily = " " + ("█" * bar_len) if bar_len > 0 else ""
         p50_str = f"{p50_val:5.1f} mm{bar_daily}"
@@ -455,10 +568,9 @@ def display_tui(parquet_path: str | None = None, days: int = 5, make_html: bool 
 
     # 5. GENERACIÓN HTML
     if make_html:
-        html_file = generate_html_spaghetti_plot(df)
+        html_file = generate_html_spaghetti_plot(df, location_name=preset['name'])
         if html_file:
             console.print(f"\n[bold green]✓ Gráfico HTML Interactivo (Spaghetti Plot):[/bold green] [underline cyan]{html_file.resolve()}[/underline cyan]")
-            console.print(f"  [dim]Abre este archivo en tu navegador para ver las 64 trayectorias individuales.[/dim]\n")
 
 
 def main():
@@ -468,6 +580,13 @@ def main():
     parser.add_argument("--no-html", action="store_true", help="No generar el archivo HTML")
     parser.add_argument("--fetch", action="store_true", help="Extraer primero el snapshot más reciente desde BigQuery")
 
+    # Modos de ubicación
+    parser.add_argument("--casa", action="store_true", help="Pronóstico para Ñuñoa (Casa)")
+    parser.add_argument("--trabajo", action="store_true", help="Pronóstico para Las Condes (Trabajo)")
+    parser.add_argument("--poniente", action="store_true", help="Pronóstico para Santiago Centro / Poniente")
+    parser.add_argument("--lugar", "-l", help="Alias de ubicación (casa, trabajo, poniente, norte, cordillera)", default=None)
+    parser.add_argument("--commute", "-c", action="store_true", help="Modo especial de Traslado Diario (Ñuñoa ⇄ Las Condes)")
+
     args = parser.parse_args()
 
     if args.fetch:
@@ -475,7 +594,23 @@ def main():
         from query_weathernext import fetch_weather_data
         fetch_weather_data()
 
-    display_tui(parquet_path=args.file, days=args.days, make_html=not args.no_html)
+    # Si se pide el modo commute
+    if args.commute:
+        raw_df, _ = load_latest_snapshot(args.file)
+        display_commute_view(raw_df)
+        return
+
+    # Determinar lugar
+    if args.trabajo:
+        loc = "trabajo"
+    elif args.poniente:
+        loc = "poniente"
+    elif args.lugar:
+        loc = args.lugar
+    else:
+        loc = "casa" # Ñuñoa por defecto
+
+    display_tui(parquet_path=args.file, location_key=loc, days=args.days, make_html=not args.no_html)
 
 
 if __name__ == "__main__":

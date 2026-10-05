@@ -9,8 +9,15 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
 * **Componentes**: [`storm_tui.py`](../../storm_tui.py), [`storm`](../../storm), [`data/temporal_santiago.html`](../../data/temporal_santiago.html).
 * **Comando de Verificación**:
   ```bash
+  # Por defecto: Ñuñoa (Casa)
   ./storm
-  # Con extracción previa desde BigQuery:
+  # Modo Traslado Diario (Commute) Ñuñoa ⇄ Las Condes:
+  ./storm --commute
+  # Específico Las Condes (Trabajo):
+  ./storm --trabajo
+  # Específico Santiago Poniente / Centro:
+  ./storm --poniente
+  # Con extracción fresca desde BigQuery:
   ./storm --fetch
   # Con ventana extendida de días:
   ./storm --days 7

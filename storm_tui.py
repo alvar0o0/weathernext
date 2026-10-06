@@ -303,12 +303,78 @@ def generate_html_spaghetti_plot(df: pl.DataFrame, location_name: str = "Santiag
     return out
 
 
-def display_commute_view(df: pl.DataFrame):
+def display_commute_view(df: pl.DataFrame, is_mobile: bool = False):
     """
     Vista especializada de Traslado Diario (Commute):
     Analiza ventanas de viaje entre Ñuñoa (Casa) y Las Condes (Trabajo)
     para lunes, martes y miércoles.
     """
+    df_oriente, _ = filter_by_location(df, "casa")
+    summary, _ = analyze_storm(df_oriente, max_hours=72)
+
+    if is_mobile:
+        console.print(Panel(
+            "[bold cyan]🚗 TRASLADO DIARIO: ÑUÑOA ⇄ LAS CONDES[/bold cyan]\n"
+            "[dim]Evaluación para celular (Horas Punta)[/dim]",
+            border_style="magenta",
+            box=box.ROUNDED
+        ))
+
+        blocks_text = Text()
+        first = True
+        div_len = max(20, min(46, console.width - 4))
+        for row in summary.iter_rows(named=True):
+            ft_local = row["forecast_time"] + SANTIAGO_TZ_OFFSET
+            hour = ft_local.hour
+            day_str = f"{SPANISH_WEEKDAYS[ft_local.weekday()]} {ft_local.day:02d}/{ft_local.month:02d}"
+            p50 = row["p50"]
+            p90 = row["p90"]
+
+            if hour == 9:
+                if not first:
+                    blocks_text.append("─" * div_len + "\n", style="dim")
+                first = False
+                blocks_text.append(f"📅 {day_str} • Mañana (08-10h CLT)\n", style="bold white")
+                blocks_text.append("➔ Sentido: Ñuñoa ➔ Las Condes\n", style="cyan")
+                blocks_text.append(f"💧 Lluvia: {p50:4.1f} mm (P90: {p90:4.1f} mm)\n", style="bold")
+                if p50 >= 8.0:
+                    blocks_text.append("🔴 Impacto: CRÍTICO (Anegamientos)\n", style="bold red")
+                elif p50 >= 3.0:
+                    blocks_text.append("🟠 Impacto: ALTO (Congestión Severa)\n", style="bold yellow")
+                elif p50 >= 0.5:
+                    blocks_text.append("🟡 Impacto: MODERADO (Resbaladizo)\n", style="cyan")
+                else:
+                    blocks_text.append("🟢 Impacto: Despejado / Sin riesgo\n", style="green")
+
+            elif hour == 21:
+                if not first:
+                    blocks_text.append("─" * div_len + "\n", style="dim")
+                first = False
+                blocks_text.append(f"📅 {day_str} • Tarde (18-20h CLT)\n", style="bold white")
+                blocks_text.append("➔ Sentido: Las Condes ➔ Ñuñoa\n", style="cyan")
+                blocks_text.append(f"💧 Lluvia: {p50:4.1f} mm (P90: {p90:4.1f} mm)\n", style="bold")
+                if p50 >= 8.0:
+                    blocks_text.append("🔴 Impacto: CRÍTICO (Tráfico Lento)\n", style="bold red")
+                elif p50 >= 3.0:
+                    blocks_text.append("🟠 Impacto: ALTO (Retención / Visib.)\n", style="bold yellow")
+                elif p50 >= 0.5:
+                    blocks_text.append("🟡 Impacto: MODERADO (Pesado)\n", style="cyan")
+                else:
+                    blocks_text.append("🟢 Impacto: Normal / Sin alerta\n", style="green")
+
+        console.print(Panel(blocks_text, title="🚦 Ventanas de Viaje", border_style="cyan", box=box.ROUNDED))
+
+        rec_text = (
+            "• [bold red]Martes 06 (Mañana):[/bold red] Pico máximo (~13-18 mm).\n"
+            "  Anegamientos en Manquehue y Tobalaba.\n"
+            "  [italic]👉 Teletrabajo altamente recomendado.[/italic]\n"
+            "• [bold yellow]Miércoles 07:[/bold yellow] Lluvia continua (~4-6 mm).\n"
+            "  Traslado posible con precaución."
+        )
+        console.print(Panel(rec_text, title="💡 Recomendación", border_style="yellow", box=box.ROUNDED))
+        return
+
+    # Vista escritorio estándar (ancho)
     console.print(Panel(
         "[bold cyan]🚗 ANÁLISIS DE TRASLADO DIARIO: ÑUÑOA ⇄ LAS CONDES[/bold cyan]\n"
         "[dim]Evaluación de ventanas de hora punta (Mañana 06:00-12:00 CLT / Tarde 18:00-24:00 CLT)[/dim]",
@@ -316,11 +382,6 @@ def display_commute_view(df: pl.DataFrame):
         box=box.ROUNDED
     ))
 
-    # Filtrar por la celda Oriente (que cubre el corredor Ñuñoa - Las Condes)
-    df_oriente, _ = filter_by_location(df, "casa")
-    summary, _ = analyze_storm(df_oriente, max_hours=72)
-
-    # Filtrar solo pasos correspondientes a mañana (06-12h CLT) y tarde (18-24h CLT)
     commute_table = Table(box=box.ROUNDED, header_style="bold cyan", padding=(0, 1))
     commute_table.add_column("Ventana de Traslado", style="bold white", width=22)
     commute_table.add_column("Sentido", justify="center", width=18)
@@ -333,12 +394,10 @@ def display_commute_view(df: pl.DataFrame):
         hour = ft_local.hour
         day_str = f"{SPANISH_WEEKDAYS[ft_local.weekday()]} {ft_local.day:02d}/{ft_local.month:02d}"
 
-        # Ventana de mañana (09:00 CLT representa el bloque 03:00 - 09:00 o 06:00 - 12:00)
-        # Horas en UTC: 12:00 UTC = 09:00 CLT, 18:00 UTC = 15:00 CLT, 00:00 UTC = 21:00 CLT
         p50 = row["p50"]
         p90 = row["p90"]
 
-        if hour == 9: # Bloque de mañana (hacia el trabajo)
+        if hour == 9:
             ventana = f"{day_str} Mañana (08-10h)"
             sentido = "Ñuñoa ➔ Las Condes"
             if p50 >= 8.0:
@@ -352,8 +411,8 @@ def display_commute_view(df: pl.DataFrame):
 
             commute_table.add_row(ventana, sentido, f"{p50:4.1f} mm", f"{p90:4.1f} mm", impacto)
 
-        elif hour == 15 or hour == 21: # Bloque de tarde/retorno
-            if hour == 21: # Tarde retorno (18:00 - 21:00)
+        elif hour == 15 or hour == 21:
+            if hour == 21:
                 ventana = f"{day_str} Tarde (18-20h)"
                 sentido = "Las Condes ➔ Ñuñoa"
                 if p50 >= 8.0:
@@ -379,20 +438,158 @@ def display_commute_view(df: pl.DataFrame):
     ))
 
 
-def display_tui(parquet_path: str | None = None, location_key: str = "casa", days: int = 5, make_html: bool = True):
-    """Renderiza el dashboard interactivo en la terminal con Rich."""
-    raw_df, filepath = load_latest_snapshot(parquet_path)
-    df, preset = filter_by_location(raw_df, preset_key=location_key)
+def _display_tui_mobile(
+    summary: pl.DataFrame,
+    metrics: dict,
+    preset: dict,
+    init_str: str,
+    level_code: str,
+    level_label: str,
+    level_style: str,
+    days: int,
+    hours: int | None = None,
+):
+    """Renderizado optimizado para pantallas estrechas / smartphones vía SSH."""
+    # 1. Header Compacto
+    header_text = Text()
+    header_text.append("🌦️ WEATHERNEXT 2.0 (Mobile)\n", style="bold cyan")
+    header_text.append(f"📍 {preset['name']}\n", style="bold yellow")
+    header_text.append(f"Corrida: {init_str} • 64 miembros", style="dim")
+    console.print(Panel(header_text, border_style="cyan", box=box.ROUNDED))
 
-    max_hours = days * 24
-    summary, metrics = analyze_storm(df, max_hours=max_hours)
-    level_code, level_label, level_style = determine_alert_level(metrics)
+    # 2. Resumen Síntesis (Tarjeta Vertical Unificada)
+    alert_border = "red" if "ROJA" in level_code else ("yellow" if "NARANJA" in level_code or "AMARILLA" in level_code else "green")
+    peak_dt = metrics["peak_time"]
+    peak_dt_local = peak_dt + SANTIAGO_TZ_OFFSET
+    peak_day_name = SPANISH_WEEKDAYS[peak_dt_local.weekday()]
 
-    # 1. ENCABEZADO
-    init_dt = metrics["init_time"]
-    init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
+    summary_body = Text()
+    short_labels = {
+        "ROJA": "ALERTA ROJA • Temporal Severo",
+        "NARANJA": "ALERTA NARANJA • Temporal Moderado",
+        "AMARILLA": "ALERTA AMARILLA • Chubascos Activos",
+        "VERDE": "ALERTA VERDE • Sin Riesgo Mayor",
+    }
+    alert_tag = short_labels.get(level_code, level_label)
+    summary_body.append(f"⚠️  {alert_tag}\n\n", style=level_style)
+
+    summary_body.append(f"🌧️ Acumulado ({days} Días):\n", style="bold cyan")
+    summary_body.append(f"  • P50 (Mediana):  {metrics['cum_p50']:>6.1f} mm\n", style="bold white")
+    summary_body.append(f"  • P90 (Crítico):  {metrics['cum_p90']:>6.1f} mm\n", style="bold orange3")
+    summary_body.append(f"  • Media Ensamble: {metrics['cum_mean']:>6.1f} mm\n\n", style="dim")
+
+    summary_body.append("⚡ Pico del Temporal:\n", style="bold magenta")
+    summary_body.append(f"  • {peak_day_name} {peak_dt_local.strftime('%d/%m %H:%M CLT')} (+{metrics['peak_hours']}h)\n", style="bold white")
+    summary_body.append(f"  • P50: {metrics['peak_p50']:.1f} mm (P90: {metrics['peak_p90']:.1f} mm/6h)\n\n", style="bold white")
+
+    summary_body.append("🌪️ Dinámica Atmosférica:\n", style="bold bright_blue")
+    summary_body.append(f"  • Viento P90:     {metrics['max_wind']:.1f} km/h\n", style="bold white")
+    summary_body.append(f"  • Presión Mínima: {metrics['min_pressure']:.1f} hPa", style="bold white")
+
+    console.print(Panel(
+        summary_body,
+        title="[bold]SÍNTESIS DEL TEMPORAL[/bold]",
+        border_style=alert_border,
+        box=box.ROUNDED
+    ))
+
+    # 3. Tabla Diaria Compacta (3 columnas, encaja en <45 caracteres)
+    daily = summary.with_columns(
+        (pl.col("forecast_time") + SANTIAGO_TZ_OFFSET).dt.date().alias("fecha_local")
+    ).group_by("fecha_local").agg([
+        pl.col("p50").sum().round(1).alias("lluvia_p50"),
+        pl.col("p90").sum().round(1).alias("lluvia_p90"),
+    ]).sort("fecha_local")
+
+    daily_table = Table(
+        title="📅 Lluvia Acumulada por Día",
+        box=box.ROUNDED,
+        header_style="bold magenta",
+        padding=(0, 1),
+        expand=True
+    )
+    daily_table.add_column("Día", style="bold white", width=11, no_wrap=True)
+    daily_table.add_column("P50 / P90", justify="right", style="bold cyan", width=14, no_wrap=True)
+    daily_table.add_column("Gráf", justify="center", width=10, no_wrap=True)
+
+    for d in daily.iter_rows(named=True):
+        f = d["fecha_local"]
+        dia_str = f"{SPANISH_WEEKDAYS[f.weekday()]} {f.day:02d}/{f.month:02d}"
+        p50_val = d["lluvia_p50"]
+        p90_val = d["lluvia_p90"]
+        p_str = f"{p50_val:4.1f}/{p90_val:4.1f}mm"
+        bar = render_rain_bar(p50_val, max_scale=35.0, width=8)
+        daily_table.add_row(dia_str, p_str, bar)
+
+    daily_table.add_section()
+    daily_table.add_row(
+        "[bold white]TOTAL[/bold white]",
+        f"[bold cyan]{metrics['cum_p50']:4.1f}[/bold cyan]/[bold orange3]{metrics['cum_p90']:4.1f}mm[/bold orange3]",
+        ""
+    )
+    console.print(daily_table)
+
+    # 4. Cronograma Horario Compacto (4 columnas, encaja en <45 caracteres)
+    if hours is not None:
+        horizon_limit = max(1, hours // 6)
+    else:
+        horizon_limit = 6  # 36 horas por defecto en celular
+
+    horizon_limit = min(len(summary), horizon_limit)
+    hours_shown = horizon_limit * 6
+
+    hourly_table = Table(
+        title=f"📊 Próximas {hours_shown} Horas (Pasos 6h)",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold cyan",
+        padding=(0, 1),
+        expand=True
+    )
+    hourly_table.add_column("Hora (CLT)", style="bold white", width=12, no_wrap=True)
+    hourly_table.add_column("Prob", justify="right", width=5, no_wrap=True)
+    hourly_table.add_column("P50 / P90", justify="right", style="bold cyan", width=13, no_wrap=True)
+    hourly_table.add_column("Gráf", justify="center", width=8, no_wrap=True)
+
+    for row in summary.head(horizon_limit).iter_rows(named=True):
+        ft_local = row["forecast_time"] + SANTIAGO_TZ_OFFSET
+        day_name = SPANISH_WEEKDAYS[ft_local.weekday()]
+        h_str = f"{day_name} {ft_local.strftime('%d %H:%M')}"
+        prob = row["prob_pct"]
+        if prob >= 90:
+            prob_txt = Text(f"{prob:3.0f}%", style="bold red")
+        elif prob >= 60:
+            prob_txt = Text(f"{prob:3.0f}%", style="bold yellow")
+        elif prob >= 30:
+            prob_txt = Text(f"{prob:3.0f}%", style="cyan")
+        else:
+            prob_txt = Text(f"{prob:3.0f}%", style="dim")
+
+        p50 = row["p50"]
+        p90 = row["p90"]
+        rain_txt = f"{p50:4.1f}/{p90:4.1f}mm" if (p50 > 0 or p90 > 0) else "   -   "
+        bar = render_rain_bar(p50, max_scale=15.0, width=6)
+        hourly_table.add_row(h_str, prob_txt, rain_txt, bar)
+
+    console.print(hourly_table)
+    if len(summary) > horizon_limit:
+        console.print(f"[dim]ℹ️ {hours_shown}h críticas. Ver todo: '--hours {len(summary)*6}'[/dim]\n")
+
+
+def _display_tui_desktop(
+    summary: pl.DataFrame,
+    metrics: dict,
+    preset: dict,
+    filepath: Path,
+    init_str: str,
+    level_code: str,
+    level_label: str,
+    level_style: str,
+    days: int,
+):
+    """Renderizado completo para terminales estándar de escritorio (>=80 columnas)."""
     target_coord = preset["target_cell"]
 
+    # 1. ENCABEZADO
     header_text = Text()
     header_text.append("🌦️  WEATHERNEXT 2.0 ", style="bold cyan")
     header_text.append("• GOOGLE DEEPMIND NEURAL ENSEMBLE\n", style="bold white")
@@ -441,7 +638,6 @@ def display_tui(parquet_path: str | None = None, location_key: str = "casa", day
         box=box.ROUNDED
     )
 
-    # Tarjetas en cuadrícula 2x2
     cards_grid = Table.grid(expand=True, padding=(0, 1))
     cards_grid.add_column(ratio=1)
     cards_grid.add_column(ratio=1)
@@ -566,17 +762,67 @@ def display_tui(parquet_path: str | None = None, location_key: str = "casa", day
     )
     console.print(daily_table)
 
+
+def display_tui(
+    parquet_path: str | None = None,
+    location_key: str = "casa",
+    days: int = 5,
+    make_html: bool = True,
+    is_mobile: bool = False,
+    hours: int | None = None,
+):
+    """Renderiza el dashboard interactivo en la terminal con Rich."""
+    raw_df, filepath = load_latest_snapshot(parquet_path)
+    df, preset = filter_by_location(raw_df, preset_key=location_key)
+
+    max_hours = days * 24
+    summary, metrics = analyze_storm(df, max_hours=max_hours)
+    level_code, level_label, level_style = determine_alert_level(metrics)
+
+    init_dt = metrics["init_time"]
+    init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
+
+    if is_mobile:
+        _display_tui_mobile(
+            summary=summary,
+            metrics=metrics,
+            preset=preset,
+            init_str=init_str,
+            level_code=level_code,
+            level_label=level_label,
+            level_style=level_style,
+            days=days,
+            hours=hours,
+        )
+    else:
+        _display_tui_desktop(
+            summary=summary,
+            metrics=metrics,
+            preset=preset,
+            filepath=filepath,
+            init_str=init_str,
+            level_code=level_code,
+            level_label=level_label,
+            level_style=level_style,
+            days=days,
+        )
+
     # 5. GENERACIÓN HTML
     if make_html:
         html_file = generate_html_spaghetti_plot(df, location_name=preset['name'])
         if html_file:
-            console.print(f"\n[bold green]✓ Gráfico HTML Interactivo (Spaghetti Plot):[/bold green] [underline cyan]{html_file.resolve()}[/underline cyan]")
+            if is_mobile:
+                console.print(f"[bold green]✓ Gráfico HTML:[/bold green] [underline cyan]{html_file.name}[/underline cyan]")
+            else:
+                console.print(f"\n[bold green]✓ Gráfico HTML Interactivo (Spaghetti Plot):[/bold green] [underline cyan]{html_file.resolve()}[/underline cyan]")
 
 
 def main():
     parser = argparse.ArgumentParser(description="WeatherNext Storm TUI — Analizador de Temporales")
     parser.add_argument("--file", "-f", help="Ruta a un archivo Parquet específico", default=None)
     parser.add_argument("--days", "-d", type=int, default=5, help="Días de pronóstico a visualizar (defecto: 5)")
+    parser.add_argument("--hours", type=int, default=None, help="Número de horas a mostrar en el cronograma (ej: 36, 48)")
+    parser.add_argument("--mobile", "-m", action="store_true", help="Formato optimizado para celular / pantallas estrechas (<65 columnas)")
     parser.add_argument("--no-html", action="store_true", help="No generar el archivo HTML")
     parser.add_argument("--fetch", action="store_true", help="Extraer primero el snapshot más reciente desde BigQuery")
 
@@ -589,6 +835,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Detección automática o explícita de terminal móvil
+    global console
+    is_mobile = args.mobile or console.width < 68
+    if is_mobile:
+        target_width = 50 if (args.mobile and console.width >= 68) else console.width
+        console = Console(width=target_width, height=console.size.height or 40)
+
     if args.fetch:
         console.print("[bold yellow]Extrayendo última corrida desde BigQuery...[/bold yellow]")
         from query_weathernext import fetch_weather_data
@@ -597,7 +850,7 @@ def main():
     # Si se pide el modo commute
     if args.commute:
         raw_df, _ = load_latest_snapshot(args.file)
-        display_commute_view(raw_df)
+        display_commute_view(raw_df, is_mobile=is_mobile)
         return
 
     # Determinar lugar
@@ -610,7 +863,14 @@ def main():
     else:
         loc = "casa" # Ñuñoa por defecto
 
-    display_tui(parquet_path=args.file, location_key=loc, days=args.days, make_html=not args.no_html)
+    display_tui(
+        parquet_path=args.file,
+        location_key=loc,
+        days=args.days,
+        make_html=not args.no_html,
+        is_mobile=is_mobile,
+        hours=args.hours,
+    )
 
 
 if __name__ == "__main__":

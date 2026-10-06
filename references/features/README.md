@@ -11,7 +11,11 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ```bash
   # Por defecto: Ñuñoa (Casa)
   ./storm
-  # Modo Traslado Diario (Commute) Ñuñoa ⇄ Las Condes:
+  # Modo Celular / SSH móvil (diseño adaptado para <60 columnas):
+  ./storm --mobile
+  # Modo Traslado Diario (Commute) en celular:
+  ./storm -m -c
+  # Modo Traslado Diario (Commute) estándar escritorio:
   ./storm --commute
   # Específico Las Condes (Trabajo):
   ./storm --trabajo
@@ -19,8 +23,9 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ./storm --poniente
   # Con extracción fresca desde BigQuery:
   ./storm --fetch
-  # Con ventana extendida de días:
+  # Con ventana extendida de días u horas:
   ./storm --days 7
+  ./storm -m --hours 48
   ```
 
 ---

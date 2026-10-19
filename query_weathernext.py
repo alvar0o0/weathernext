@@ -21,15 +21,15 @@ def load_config(config_path: str = "config.ini") -> dict:
     if "GCP" not in config or "LOCATION" not in config:
         raise ValueError("El archivo config.ini debe contener al menos las secciones [GCP] y [LOCATION].")
 
-    project_id = config.get("GCP", "project_id", fallback="").strip()
-    if not project_id or project_id == "tu-proyecto-gcp-id":
+    project_id = os.environ.get("GCP_PROJECT_ID") or config.get("GCP", "project_id", fallback="").strip()
+    if not project_id or project_id in ("tu-proyecto-gcp-id", "TU_GCP_PROJECT_ID"):
         print(
-            "⚠️ ADVERTENCIA: Reemplaza 'tu-proyecto-gcp-id' en config.ini con tu ID de proyecto GCP real.",
+            "⚠️ ADVERTENCIA: Configura tu ID de proyecto GCP en config.ini o mediante la variable de entorno GCP_PROJECT_ID.",
             file=sys.stderr,
         )
 
     credentials_file = config.get("GCP", "credentials_file", fallback="").strip()
-    public_project = config.get("GCP", "public_project", fallback="gen-lang-client-0313723965").strip()
+    public_project = config.get("GCP", "public_project", fallback=project_id).strip()
     dataset = config.get("GCP", "dataset", fallback="weathernext_2").strip()
     table_name = config.get("GCP", "table_name", fallback="weathernext_2_0_0").strip()
     raw_full_table_id = config.get("GCP", "full_table_id", fallback="").strip()

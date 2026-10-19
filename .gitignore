@@ -19,3 +19,15 @@ data/
 PROJECT.md
 SPECS.md
 
+# Credentials & Local Configuration
+config.ini
+*.json
+*.pem
+*.key
+.env
+
+# OS & Tool metadata
+.DS_Store
+.antigravitycli/
+
+

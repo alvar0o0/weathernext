@@ -3,8 +3,8 @@
 **Destinatario principal:** `weathernext@google.com`  
 **Destinatarios secundarios (si aplica):** Soporte de Google Cloud Analytics Hub / Google DeepMind Weather Team  
 **Remitente / Proyecto GCP:**  
-- **Correo autorizado:** `alvaro.ortiz.fredes@gmail.com`  
-- **GCP Project ID:** `gen-lang-client-0313723965`  
+- **Correo autorizado:** `<TU_CORREO_AUTORIZADO@GMAIL.COM>`  
+- **GCP Project ID:** `<TU_GCP_PROJECT_ID>`  
 - **GCP Organization / User ID:** Usuario registrado en el programa oficial de acceso a WeatherNext 3.0  
 
 ---
@@ -17,11 +17,11 @@ Dear WeatherNext & Google DeepMind Team,
 
 First, congratulations on the launch of **WeatherNext 3.0**! The spatial upgrade (0.05° station head / 0.1° synoptic) and 1-hour temporal resolution represent a massive milestone for operational ensemble forecasting.
 
-I am writing to report a hard infrastructure quota issue affecting user onboarding via **BigQuery Analytics Hub**. My account (`alvaro.ortiz.fredes@gmail.com`) was approved for WeatherNext 3 access, but when attempting to subscribe to the official shared listing in BigQuery Analytics Hub, the subscription fails immediately with the following error:
+I am writing to report a hard infrastructure quota issue affecting user onboarding via **BigQuery Analytics Hub**. My account (`<TU_CORREO_AUTORIZADO@GMAIL.COM>`) was approved for WeatherNext 3 access, but when attempting to subscribe to the official shared listing in BigQuery Analytics Hub, the subscription fails immediately with the following error:
 
 ### Error Details
 * **Source Dataset:** `866962084172:WeatherNext_3`
-* **Target GCP Project:** `gen-lang-client-0313723965`
+* **Target GCP Project:** `<TU_GCP_PROJECT_ID>`
 * **Target Dataset Name:** `weathernext_3`
 * **BigQuery API Error Response:**
   ```text
@@ -43,10 +43,10 @@ In the meantime, we are consuming the statistics via Google Cloud Storage Zarr (
 Thank you for your time, support, and outstanding research.
 
 Best regards,  
-**Álvaro Ortiz Fredes**  
+**[Tu Nombre / Organización]**  
 Santiago, Chile  
-GCP Project: `gen-lang-client-0313723965`  
-Email: `alvaro.ortiz.fredes@gmail.com`
+GCP Project: `<TU_GCP_PROJECT_ID>`  
+Email: `<TU_CORREO_AUTORIZADO@GMAIL.COM>`
 
 ---
 
@@ -58,11 +58,11 @@ Estimado equipo de WeatherNext y Google DeepMind:
 
 En primer lugar, felicitaciones por el lanzamiento de **WeatherNext 3.0**. La mejora a 0.05° en cabezales de estaciones y resolución de 1 hora es un salto formidable para el pronóstico de ensambles.
 
-Les escribo para reportar un bloqueo de infraestructura en **BigQuery Analytics Hub**. Mi cuenta (`alvaro.ortiz.fredes@gmail.com`) fue aprobada para acceder a WeatherNext 3, pero al intentar suscribirme al listado oficial desde la consola de BigQuery, el sistema arroja el siguiente error:
+Les escribo para reportar un bloqueo de infraestructura en **BigQuery Analytics Hub**. Mi cuenta (`<TU_CORREO_AUTORIZADO@GMAIL.COM>`) fue aprobada para acceder a WeatherNext 3, pero al intentar suscribirme al listado oficial desde la consola de BigQuery, el sistema arroja el siguiente error:
 
 ### Detalle del Error
 * **Dataset de Origen:** `866962084172:WeatherNext_3`
-* **Proyecto GCP de Destino:** `gen-lang-client-0313723965`
+* **Proyecto GCP de Destino:** `<TU_GCP_PROJECT_ID>`
 * **Nombre de Dataset:** `weathernext_3`
 * **Mensaje de Error en BigQuery:**
   ```text
@@ -80,6 +80,6 @@ BigQuery Analytics Hub impone por defecto un límite estricto de 1.000 suscripci
 Quedo atento a sus comentarios. Mientras tanto, nos encontramos consumiendo las estadísticas vía GCS Zarr (`gs://weathernext3_statistics_spatial`), pero el acceso nativo por BigQuery es fundamental para nuestros pipelines analíticos.
 
 Saludos cordiales,  
-**Álvaro Ortiz Fredes**  
+**[Tu Nombre / Organización]**  
 Santiago, Chile  
-Proyecto GCP: `gen-lang-client-0313723965`
+Proyecto GCP: `<TU_GCP_PROJECT_ID>`

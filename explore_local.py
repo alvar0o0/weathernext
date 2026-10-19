@@ -44,7 +44,15 @@ def explore_parquet(file_path: Path):
         print(f"   * {col_name:20} -> {dtype}")
 
     print("\n--- Resumen Estadistico de Variables Fisicas ---")
-    numeric_cols = [c for c in ["temp_2m_celsius", "precip_6h", "pressure_msl", "wind_u_10m", "wind_v_10m"] if c in df.columns]
+    numeric_cols = [
+        c for c in [
+            "temp_2m_celsius",
+            "precip_6h_mm",
+            "pressure_hpa",
+            "wind_speed_kmh",
+            "wind_speed_100m_kmh",
+        ] if c in df.columns
+    ]
     if numeric_cols:
         stats = df.select(
             [

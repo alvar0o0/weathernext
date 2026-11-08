@@ -16,6 +16,8 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from google.api_core.exceptions import GoogleAPIError
 
+from usage_tracker import get_bigquery_client
+
 
 def load_config(config_path: str = "config.ini") -> dict:
     """Lee y valida el archivo de configuración .config / .ini con parámetros de seguridad y almacenamiento."""
@@ -219,13 +221,8 @@ def fetch_weather_data(config_path: str = "config.ini") -> pl.DataFrame:
     print(f"   * Coordenadas:          Latitud {cfg['latitude']}, Longitud {cfg['longitude']} (Radio: {cfg['radius_meters']}m)")
     print(f"   * Limite de seguridad:  {cfg['max_bytes_billed_mb']:.0f} MB proyectados maximos")
 
-    if cfg.get("credentials_file") and Path(cfg["credentials_file"]).exists():
-        creds = service_account.Credentials.from_service_account_file(cfg["credentials_file"])
-        client = bigquery.Client(project=cfg["project_id"], credentials=creds)
-        print(f"   * Autenticacion:        Service Account ({cfg['credentials_file']})")
-    else:
-        client = bigquery.Client(project=cfg["project_id"])
-        print(f"   * Autenticacion:        ADC (Sistema por defecto)")
+    client = get_bigquery_client(config_path)
+    print("   * Autenticacion:        BigQuery Client Inicializado (ADC / SA)")
 
     # Detección automática de la última corrida si init_time es 'latest' o está vacío
     if cfg["init_time"].lower() in ("", "latest", "auto"):

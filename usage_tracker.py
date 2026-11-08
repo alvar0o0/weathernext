@@ -5,14 +5,74 @@ Implementa contabilidad paralela (doble entrada) en SQLite:
   - Registro oficial sincronizado desde INFORMATION_SCHEMA de BigQuery
 """
 
-import sqlite3
+import configparser
 from datetime import datetime, timezone
+import os
 from pathlib import Path
+import socket
+import sqlite3
 from typing import Any, Dict, List, Optional
+
+# Ensure IPv4 resolution to prevent IPv6 blackhole stalls on GCP endpoints
+_orig_getaddrinfo = socket.getaddrinfo
+def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+socket.getaddrinfo = _getaddrinfo_ipv4
+
+import google.auth
+from google.cloud import bigquery
+from google.oauth2 import service_account
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 DB_DEFAULT_PATH = Path("data/usage.db")
 FREE_TIER_BYTES = 1000 * 1024 * 1024 * 1024  # 1 TB = 1,000 GB
 COST_PER_TB_USD = 6.25
+
+
+def get_bigquery_client(config_path: str = "config.ini") -> bigquery.Client:
+    """
+    Inicializa el cliente de BigQuery con adaptador HTTP resiliente (retries TLS/SSL).
+    Prioriza Application Default Credentials (ADC) si credentials_file está vacío o ausente.
+    Si credentials_file está configurado y existe, lo intenta; si falla con error de permisos,
+    hace fallback inmediato a ADC.
+    """
+    cfg = configparser.ConfigParser()
+    path = Path(config_path)
+    project_id = os.environ.get("GCP_PROJECT_ID", "")
+    creds_file = ""
+
+    if path.exists():
+        cfg.read(path, encoding="utf-8")
+        if not project_id:
+            project_id = cfg.get("GCP", "project_id", fallback="").strip()
+        creds_file = cfg.get("GCP", "credentials_file", fallback="").strip()
+
+    client = None
+    if creds_file and Path(creds_file).exists():
+        try:
+            creds = service_account.Credentials.from_service_account_file(creds_file)
+            test_client = bigquery.Client(project=project_id, credentials=creds)
+            # Test rápido de lectura mínima
+            test_client.query("SELECT 1 FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT LIMIT 1").result()
+            client = test_client
+        except Exception:
+            client = None
+
+    if client is None:
+        creds, _ = google.auth.default()
+        client = bigquery.Client(project=project_id, credentials=creds)
+
+    retries = Retry(
+        total=5,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    client._http.mount("https://", adapter)
+    return client
 
 
 def get_db_connection(db_path: Path = DB_DEFAULT_PATH) -> sqlite3.Connection:

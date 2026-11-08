@@ -50,6 +50,29 @@ Bajo la convención de verificación de la metodología **A-Stack**, interactúa
 # Modo Celular / SSH móvil (pantallas estrechas <60 columnas en Termux/Prompt):
 ./storm --mobile
 
+# WeatherNext 3.0 en celular (resolución 5 km / 10 km, 250 miembros en pantalla móvil):
+./storm --wn3 --mobile
+# o atajo ultrarrápido:
+./storm -3m
+./storm -3m --hourly
+
+# Weather App Visual & Caipirinha Beach Index (Estilo Apple Weather en Terminal):
+./weather                  # Vista principal Río de Janeiro (Copacabana / Ipanema)
+./weather -m               # Versión adaptada para celular (<50 columnas)
+./weather -d 2026-10-31    # Consultar un día específico del viaje
+./weather --ilha-grande    # Vista para Ilha Grande
+./weather --buzios         # Vista para Búzios
+
+# Planificador de Vacaciones (Río de Janeiro & Ilha Grande):
+./storm -3 --vacaciones
+# o en versión celular:
+./storm -3m --vacaciones
+
+# Consultas directas para el litoral de Brasil (Río, Ilha Grande, Angra, Paraty, Búzios):
+./storm -3 --rio
+./storm -3m --ilha-grande
+./storm -3 --angra
+
 # Modo Traslado Diario (Commute) para evaluar hora punta Ñuñoa ⇄ Las Condes:
 ./storm --commute
 # o en versión móvil:
@@ -228,6 +251,8 @@ $$\text{Altura Isoterma } 0^\circ\text{C} \approx 600\text{ m} + \frac{T_{2m}}{0
 
 ```text
 weathernext/
+├── weather                # Wrapper ejecutable para la App del Clima visual
+├── weather_app.py         # Motor visual estilo Apple Weather & Caipirinha Index
 ├── storm                  # Wrapper ejecutable para el analizador TUI
 ├── storm_tui.py           # Motor TUI (Rich), Spaghetti Plot (Plotly) y modo móvil
 ├── meter                  # Wrapper ejecutable para el medidor de cuota
@@ -250,11 +275,13 @@ weathernext/
 
 ---
 
-## 🔮 9. Próximos Pasos (WeatherNext 3)
+## ⚡ 9. WeatherNext 3.0 (Implementado & Operativo)
 
-Google DeepMind liberó **WeatherNext 3**, el cual introduce:
-* Resolución espacial de **5 km** (temperatura/rocío) y **10 km** (viento/presión) vs los 28 km de la versión 2.
-* Actualizaciones **horarias** continuas con asimilación satelital GOES en vivo.
-* Percentiles precalculados en BigQuery Analytics Hub.
-
-La solicitud de acceso ya fue tramitada. La arquitectura de este repositorio está diseñada de forma modular para que la transición hacia las tablas `weathernext_3_0_0_0p1deg` y `weathernext_3_0_0_0p05deg` se realice únicamente actualizando `config.ini` sin alterar el analizador local.
+Google DeepMind liberó **WeatherNext 3.0**, el cual está plenamente integrado en este repositorio:
+* **Resolución espacial ultradelgada**: Celdas de **5 km** (`0.05°` en `station_head_temperature_2m`) y **10 km** (`0.1°` en precipitación ERA5/IMERG, ráfagas a 100m y presión).
+* **250 Miembros Neuronales Continuos**: Horizonte horario paso a paso sin promedios artificiales de 6h.
+* **Pipeline Directo Zarr v3**: Acceso de costo $0 a `gs://weathernext3_statistics_spatial` mediante streaming HTTP `Range` y descompresión nativa Zstandard con `libzstd.so.1`.
+* **Soporte Regional & Planificador de Vacaciones**:
+  * Chile Central (Santiago Oriente, Precordillera, Farellones, San José de Maipo, Rancagua, Valparaíso, La Serena).
+  * Brasil Fluminense (Río de Janeiro, Ilha Grande, Angra dos Reis, Paraty, Búzios) con modo itinerario (`./storm -3 --vacaciones`).
+  * Modo Celular adaptable `<50` columnas (`./storm -3m`, `./storm -3m --vacaciones`).

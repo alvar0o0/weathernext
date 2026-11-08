@@ -76,6 +76,14 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ./storm --wn3 --hourly
   ./storm --wn3 --hours 48
 
+  # Modo Celular / SSH móvil para WeatherNext 3.0 (<60 columnas en Termux/Prompt/Blink):
+  ./storm --wn3 --mobile
+  ./storm -3m
+  ./storm -3m --hourly
+  ./storm -3m --hours 24
+  ./storm -3m --cordillera
+  ./storm -3m --pie-andino
+
   # Visualizar Pie Andino (La Reina / Peñalolén), Cajón del Maipo o Cordillera (Farellones 2400m) a paso de 1h
   ./storm --wn3 --pie-andino --hours 36
   ./storm --wn3 --maipo --hours 36
@@ -85,4 +93,58 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ./storm --wn3 --fetch
   ./storm --fetch-wn3
   ```
+
+---
+
+## 6. Planificador de Vacaciones & Soporte Regional Brasil (Río de Janeiro, Ilha Grande & Costa Verde)
+* **Descripción**: Módulo especializado y dinámico para monitorear el viaje del 30-10 al 14-11 a Río de Janeiro e Ilha Grande (3 al 6 de Noviembre). Incorpora un bounding box de alta resolución a 0.1° (~10 km) en GCS Zarr v3 para la costa fluminense (`LAT_RIO: 665..678`, `LON_RIO: 3152..3183`), evaluación del cruce marítimo en la Bahía de Angra dos Reis a Vila do Abraão (viento, oleaje, ráfagas y lluvia en ventana de ferris), itinerario día por día con semáforo de actividades (playa, sol, chubascos tropicales), consejos para la maleta y compatibilidad total con terminales de escritorio y celulares (<50 columnas vía `-3m`).
+* **Componentes**: [`query_weathernext3.py`](../../query_weathernext3.py), [`storm_tui.py`](../../storm_tui.py), [`storm`](../../storm), [`data/weathernext3_rio_latest.parquet`](../../data/weathernext3_rio_latest.parquet).
+* **Comandos de Verificación**:
+  ```bash
+  # Itinerario completo de vacaciones en escritorio
+  ./storm -3 --vacaciones
+  ./storm --vacaciones
+
+  # Itinerario completo optimizado para celular (<50 columnas)
+  ./storm -3m --vacaciones
+  ./storm -m --vacaciones
+
+  # Consultar zonas específicas de Brasil (desktop y celular)
+  ./storm -3 --rio
+  ./storm -3m --ilha-grande
+  ./storm -3 --angra
+  ./storm -3 --paraty
+  ./storm -3 --buzios
+
+  # Extraer nueva corrida de WeatherNext 3.0 para la región de Brasil (216 horas / 9 días continuos)
+  ./storm --fetch-rio
+  ```
+
+---
+
+## 7. Weather App Visual & Caipirinha Beach Index (Telemetría Pura Mobile-First)
+* **Descripción**: Interfaz visual ultra-compacta diseñada para celular y terminal móvil (`<50` columnas). Entrega telemetría atmosférica pura (T° nativa a 5km interpolada desde cabezal topográfico `station_head_temperature_2m_p50`, sensación térmica, punto de rocío exacto `dewpoint_2m_p50_c`, humedad relativa calculada por Magnus-Tetens, viento medio y ráfagas P90 superficiales a 10m y 100m, presión barométrica y tendencia $\Delta P / 6\text{h}$, radiación solar directa `ssrd_1h_p50_wm2`, nubosidad total y baja `tcc/lcc_p50_pct`), detalle hora por hora con **Índice de Caipirinha & Playa (1 a 10) calibrado físicamente** (penaliza falta de sol/radiación solar, viento costero en arena a 10m y Wind Chill playero en traje de baño bajo 27°C si concurren viento o nubes; activo estrictamente durante horas de sol 08:00 a 18:00 BRT, marcando `-` de noche), auto-enrutamiento inteligente de ubicación según el itinerario de vacaciones (03 al 06 Nov $\rightarrow$ Ilha Grande), desglose matemático explícito de deducciones, cálculo de ventana óptima diurna según confort real, tendencia de próximos días y alertas cuantitativas.
+* **Componentes**: [`weather_app.py`](../../weather_app.py), [`weather`](../../weather), [`query_weathernext3.py`](../../query_weathernext3.py), [`storm_tui.py`](../../storm_tui.py).
+* **Comandos de Verificación**:
+  ```bash
+  # Modo celular por defecto / SSH móvil (<50 columnas) — auto-enruta a Ilha Grande del 3 al 6 Nov:
+  ./weather
+  ./weather -m
+  ./storm --app -m
+
+  # Consultar fecha específica (ej: domingo 01 de noviembre o martes 03)
+  ./weather --date 2026-11-03
+  ./weather -d 2026-11-03
+
+  # Forzar modo extendido para escritorio (>=90 columnas)
+  ./weather --desktop
+
+  # Consultar destinos específicos
+  ./weather --ilha-grande
+  ./weather --copacabana
+  ./weather --buzios
+  ./weather --casa
+  ```
+
+
 

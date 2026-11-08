@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# CLI Wrapper para la App del Clima & Caipirinha Beach Index
+set -e
+exec uv run python weather_app.py "$@"

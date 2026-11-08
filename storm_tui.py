@@ -7,7 +7,7 @@ Incluye soporte para presets de ubicación (Ñuñoa, Las Condes) y modo de trasl
 
 import argparse
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 import polars as pl
@@ -132,7 +132,57 @@ PRESETS = {
         "target_5km": (-29.95, -71.25),
         "base_elev_m": 40.0,
     },
+    "rio": {
+        "alias": "rio",
+        "name": "Río de Janeiro (Copacabana)",
+        "desc": "Zona Sul • Litoral Carioca • Brasil",
+        "target_cell": (-22.95, -43.20),
+        "target_5km": (-22.90, -43.20),
+        "base_elev_m": 10.0,
+    },
+    "rio_de_janeiro": {
+        "alias": "rio_de_janeiro",
+        "name": "Río de Janeiro (Copacabana)",
+        "desc": "Zona Sul • Litoral Carioca • Brasil",
+        "target_cell": (-22.95, -43.20),
+        "target_5km": (-22.90, -43.20),
+        "base_elev_m": 10.0,
+    },
+    "ilha_grande": {
+        "alias": "ilha_grande",
+        "name": "Ilha Grande (Vila do Abraão)",
+        "desc": "Costa Verde RJ • Baía de Ilha Grande • Brasil",
+        "target_cell": (-23.15, -44.20),
+        "target_5km": (-23.10, -44.20),
+        "base_elev_m": 15.0,
+    },
+    "angra": {
+        "alias": "angra",
+        "name": "Angra dos Reis (Puerto)",
+        "desc": "Costa Verde RJ • Cruce en Ferry a Ilha Grande",
+        "target_cell": (-23.00, -44.30),
+        "target_5km": (-23.00, -44.30),
+        "base_elev_m": 10.0,
+    },
+    "paraty": {
+        "alias": "paraty",
+        "name": "Paraty",
+        "desc": "Costa Verde Histórica • Bahía de Paraty",
+        "target_cell": (-23.20, -44.70),
+        "target_5km": (-23.20, -44.70),
+        "base_elev_m": 5.0,
+    },
+    "buzios": {
+        "alias": "buzios",
+        "name": "Armação dos Búzios",
+        "desc": "Região dos Lagos RJ • Litoral Norte",
+        "target_cell": (-22.75, -41.90),
+        "target_5km": (-22.70, -41.90),
+        "base_elev_m": 10.0,
+    },
 }
+
+BRASIL_LOCATIONS = {"rio", "rio_de_janeiro", "ilha_grande", "angra", "paraty", "buzios"}
 
 
 def load_latest_snapshot(parquet_path: str | None = None) -> tuple[pl.DataFrame, Path]:
@@ -1106,72 +1156,485 @@ def _display_tui_desktop(
     console.print(daily_table)
 
 
-def display_wn3_tui(
-    location_key: str = "casa",
-    is_mobile: bool = False,
+def display_vacation_view(is_mobile: bool = False, hours: int | None = None):
+    """
+    Vista especializada de Vacaciones (Río de Janeiro & Ilha Grande):
+    Monitorea de forma 100% dinámica el pronóstico continuo para las vacaciones:
+      - 30 Oct a 02 Nov: Río de Janeiro (Arribo & Zona Sul)
+      - 03 Nov a 06 Nov: Ilha Grande (Trekking, Playas & Cruce en Barco)
+      - 07 Nov a 14 Nov: Río de Janeiro (Retorno & Despedida)
+    """
+    rio_path = Path("data/weathernext3_rio_latest.parquet")
+    if not rio_path.exists():
+        console.print("[bold red]Error:[/bold red] No existe data/weathernext3_rio_latest.parquet. Ejecuta './storm --fetch-rio'.")
+        sys.exit(1)
+
+    raw_df = pl.read_parquet(rio_path)
+    init_dt = raw_df["init_time"][0]
+    init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
+
+    coord_rio = PRESETS["rio"]["target_5km"]
+    coord_ilha = PRESETS["ilha_grande"]["target_5km"]
+    coord_angra = PRESETS["angra"]["target_5km"]
+
+    # Datetime local en Brasil (BRT = UTC-3)
+    df_local = raw_df.with_columns(
+        (pl.col("end_time") + SANTIAGO_TZ_OFFSET).alias("dt_local"),
+        (pl.col("end_time") + SANTIAGO_TZ_OFFSET).dt.date().alias("fecha_local"),
+    )
+
+    all_dates = sorted(df_local["fecha_local"].unique().to_list())
+    trip_start = date(2026, 10, 30)
+    trip_end = date(2026, 11, 14)
+    ilha_start = date(2026, 11, 3)
+    ilha_end = date(2026, 11, 6)
+
+    trip_dates = [d for d in all_dates if d >= trip_start and d <= trip_end]
+    if not trip_dates:
+        trip_dates = all_dates
+
+    # Header
+    if is_mobile:
+        console.print(Panel(
+            "[bold bright_magenta]✈️ VACACIONES RÍO & ILHA GRANDE[/bold bright_magenta]\n"
+            f"[bold yellow]📍 Río de Janeiro ⇄ Ilha Grande[/bold yellow]\n"
+            f"[dim]Corrida WN3: {init_str} • Paso 1h[/dim]",
+            border_style="bright_magenta",
+            box=box.ROUNDED,
+        ))
+    else:
+        header_text = Text()
+        header_text.append("✈️  WEATHERNEXT 3.0 • PLANIFICADOR DE VACACIONES RÍO DE JANEIRO & ILHA GRANDE\n", style="bold bright_magenta")
+        header_text.append("Itinerario: 30 Oct – 14 Nov 2026 • Litoral Carioca & Costa Verde Fluminense • 250 miembros neuronales\n", style="bold yellow")
+        header_text.append(f"Corrida Operacional: {init_str} | Modelo Zarr v3 (0.1° / 10 km • Paso 1h continuo)", style="dim")
+        console.print(Panel(header_text, border_style="bright_magenta", box=box.ROUNDED))
+
+    # Filas del itinerario
+    itinerary_rows = []
+    for d in trip_dates:
+        if ilha_start <= d <= ilha_end:
+            stage_name = "Ilha Grande"
+            stage_short = "🌴 Ilha"
+            stage_icon = "🌴"
+            target_coord = coord_ilha
+        elif d >= trip_start:
+            stage_name = "Río de Janeiro"
+            stage_short = "🏖️ Río"
+            stage_icon = "🏖️"
+            target_coord = coord_rio
+        else:
+            stage_name = "Previa Viaje"
+            stage_short = "✈️ Río"
+            stage_icon = "✈️"
+            target_coord = coord_rio
+
+        sub_day = df_local.filter(
+            (pl.col("fecha_local") == d)
+            & (pl.col("lat").round(2) == round(target_coord[0], 2))
+            & (pl.col("lon").round(2) == round(target_coord[1], 2))
+        )
+        if len(sub_day) == 0:
+            continue
+
+        t_min = float(sub_day["temp_5km_p50_c"].min())
+        t_max = float(sub_day["temp_5km_p50_c"].max())
+        tp_mean = float(sub_day["tp_1h_mean_mm"].sum())
+        im_p90 = float(sub_day["imerg_1h_p90_mm"].sum())
+        max_gust = float(sub_day["wind_100m_p90_kmh"].max())
+        max_wind = float(sub_day["wind_10m_p50_kmh"].max())
+
+        if tp_mean < 0.6 and im_p90 < 1.0:
+            cond_tag = "☀️ Sol / Playa"
+            cond_short = "☀️ Sol"
+            cond_style = "bold green"
+            tip = "Excelente día para sol y mar calmo (Ipanema/Copacabana o Lopes Mendes)."
+        elif tp_mean < 3.0:
+            cond_tag = "⛅ Buen Tiempo"
+            cond_short = "⛅ Bueno"
+            cond_style = "bold cyan"
+            tip = "Agradable con sol y nubes; apto trekking y paseos en barco."
+        elif tp_mean < 8.0:
+            cond_tag = "🌦️ Chubascos"
+            cond_short = "🌦️ Chuba"
+            cond_style = "bold yellow"
+            tip = "Chubascos tropicales breves de tarde/noche. Mañanas despejadas."
+        else:
+            cond_tag = "🌧️ Lluvia Activa"
+            cond_short = "🌧️ Lluvia"
+            cond_style = "bold red"
+            tip = "Chubascos tropicales intensos. Precaución en senderos selváticos."
+
+        dia_str = f"{SPANISH_WEEKDAYS[d.weekday()]} {d.day:02d}/{d.month:02d}"
+        dia_short = f"{SPANISH_WEEKDAYS[d.weekday()]} {d.day:02d}"
+        itinerary_rows.append({
+            "date": d,
+            "dia_str": dia_str,
+            "dia_short": dia_short,
+            "stage": f"{stage_icon} {stage_name}",
+            "stage_short": stage_short,
+            "t_min": t_min,
+            "t_max": t_max,
+            "tp_mean": tp_mean,
+            "im_p90": im_p90,
+            "gust": max_gust,
+            "wind": max_wind,
+            "cond_tag": cond_tag,
+            "cond_short": cond_short,
+            "cond_style": cond_style,
+            "tip": tip,
+        })
+
+    # Cruce marítimo Angra dos Reis ➔ Ilha Grande (Martes 03/11)
+    angra_day = df_local.filter(
+        (pl.col("fecha_local") == date(2026, 11, 3))
+        & (pl.col("lat").round(2) == round(coord_angra[0], 2))
+        & (pl.col("lon").round(2) == round(coord_angra[1], 2))
+    )
+    if len(angra_day) > 0:
+        ferry_sub = angra_day.filter(
+            (pl.col("dt_local").dt.hour() >= 10) & (pl.col("dt_local").dt.hour() <= 17)
+        )
+        ferry_gust = float(ferry_sub["wind_100m_p90_kmh"].max()) if len(ferry_sub) > 0 else float(angra_day["wind_100m_p90_kmh"].max())
+        ferry_wind = float(ferry_sub["wind_10m_p50_kmh"].mean()) if len(ferry_sub) > 0 else float(angra_day["wind_10m_p50_kmh"].mean())
+        ferry_rain = float(ferry_sub["tp_1h_mean_mm"].sum()) if len(ferry_sub) > 0 else 0.0
+
+        if ferry_gust < 25.0 and ferry_rain < 2.0:
+            cruce_eval = f"[bold green]✓ Favorable (Mar Calmo)[/bold green] • Viento medio {ferry_wind:.0f} km/h (ráfagas máx {ferry_gust:.0f} km/h) • Lluvia: {ferry_rain:.1f} mm"
+            cruce_tip = "Cruce en lancha rápida (flexboat) o ferry muy tranquilo sin marejada relevante."
+        elif ferry_gust < 38.0:
+            cruce_eval = f"[bold yellow]⚠️ Moderado (Oleaje Leve)[/bold yellow] • Ráfagas ~{ferry_gust:.0f} km/h"
+            cruce_tip = "Posible oleaje en boca de bahía. Recomendado tomar flexboat cerrado o ferry grande."
+        else:
+            cruce_eval = f"[bold red]⛔ Precaución Marejada[/bold red] • Ráfagas fuertes ({ferry_gust:.0f} km/h)"
+            cruce_tip = "Chequear zarpe en Capitanía de Puerto de Angra."
+
+        cruce_panel = Panel(
+            f"[bold cyan]Día de Cruce:[/bold cyan] Martes 03/11 (Ventana 10:00 - 16:00 BRT)\n"
+            f"[bold]Estado del Mar en Bahía de Angra:[/bold] {cruce_eval}\n"
+            f"[dim]Recomendación:[/dim] {cruce_tip}",
+            title="🛥️  Evaluación Cruce Marítimo: Angra dos Reis ➔ Vila do Abraão",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+        console.print(cruce_panel)
+
+    # Tabla de Itinerario
+    if is_mobile:
+        table = Table(
+            title="🗓️ Itinerario Vacaciones Día por Día",
+            box=box.ROUNDED,
+            header_style="bold magenta",
+            padding=(0, 0),
+            expand=True,
+        )
+        table.add_column("Día", style="bold white", width=7, no_wrap=True)
+        table.add_column("Destino", width=8, no_wrap=True)
+        table.add_column("T°", justify="center", width=7, no_wrap=True)
+        table.add_column("Lluvia", justify="right", style="bold cyan", width=6, no_wrap=True)
+        table.add_column("Estado", justify="center", width=10, no_wrap=True)
+
+        for r in itinerary_rows:
+            t_str = f"{r['t_min']:.0f}..{r['t_max']:.0f}°"
+            rain_str = f"{r['tp_mean']:.1f}m"
+            table.add_row(
+                r["dia_short"],
+                r["stage_short"],
+                t_str,
+                rain_str,
+                Text(r["cond_short"], style=r["cond_style"]),
+            )
+        console.print(table)
+    else:
+        table = Table(
+            title="🗓️  Cronograma Meteorológico del Itinerario de Vacaciones (WeatherNext 3.0)",
+            box=box.SIMPLE_HEAVY,
+            header_style="bold magenta",
+            padding=(0, 1),
+            pad_edge=False,
+        )
+        table.add_column("Fecha", style="bold white", no_wrap=True)
+        table.add_column("Destino / Etapa", style="bold white", no_wrap=True)
+        table.add_column("T° Mín..Máx", justify="center", no_wrap=True)
+        table.add_column("Lluvia (ERA/IM)", justify="right", style="bold cyan", no_wrap=True)
+        table.add_column("Ráfagas", justify="right", no_wrap=True)
+        table.add_column("Condición", justify="center", no_wrap=True)
+        if console.width >= 115:
+            table.add_column("Recomendación de Actividad", style="dim")
+
+        for r in itinerary_rows:
+            t_str = f"{r['t_min']:.1f}..{r['t_max']:.1f}°"
+            rain_str = f"{r['tp_mean']:.1f}/{r['im_p90']:.1f}mm"
+            row_items = [
+                r["dia_str"],
+                r["stage"],
+                t_str,
+                rain_str,
+                f"{r['gust']:.0f} km/h",
+                Text(r["cond_tag"], style=r["cond_style"]),
+            ]
+            if console.width >= 115:
+                row_items.append(r["tip"])
+            table.add_row(*row_items)
+        console.print(table)
+
+    # Tarjeta de Consejos Prácticos para el Viajero
+    tips_markup = (
+        "[bold yellow]🧳 CONSEJOS CLIMÁTICOS PARA LA MALETA Y EL VIAJE:[/bold yellow]\n\n"
+        "• [bold white]Río de Janeiro (30 Oct - 02 Nov):[/bold white] Ambiente cálido de primavera tropical (22°C a 28°C). "
+        "Ideal para tardes en Ipanema, Arpoador y visitas al Cristo/Pan de Azúcar con buena visibilidad matinal.\n"
+        "• [bold white]Cruce a Ilha Grande (03 Nov):[/bold white] Mar favorable en la bahía de Angra dos Reis. "
+        "Llevar bolso impermeable para la lancha rápida (flexboat).\n"
+        "• [bold white]Ilha Grande (03 Nov - 06 Nov):[/bold white] Clima húmedo y cálido. "
+        "Imprescindible repelente de insectos (borrachudos) y zapatillas de trekking con buen agarre para el sendero a Lopes Mendes o Dois Rios.\n"
+        "• [bold white]Lluvias:[/bold white] Los modelos no muestran ningún ciclón ni río atmosférico tropical en la costa de Río "
+        "durante la primera semana. Si llueve, serán chubascos convectivos breves y aislados al final de la tarde."
+    )
+    console.print(Panel(Text.from_markup(tips_markup), title="💡 Recomendaciones Prácticas", border_style="yellow", box=box.ROUNDED))
+
+
+def _display_wn3_mobile(
+    sub: pl.DataFrame,
+    raw_df: pl.DataFrame,
+    preset: dict,
+    clean_key: str,
+    elev_m: int,
+    init_str: str,
+    tp_cum_mean: float,
+    tp_cum_p75: float,
+    tp_cum_p90: float,
+    imerg_cum_mean: float,
+    imerg_cum_p90: float,
+    peak_row: dict,
+    peak_dt_local: datetime,
+    peak_day_name: str,
+    iso_min: int,
+    iso_max: int,
+    max_gust: float,
+    min_pres: float,
+    t5_min: float,
+    t5_max: float,
     hours: int | None = None,
     hourly: bool = False,
 ):
-    """Renderiza el dashboard de alta resolución WeatherNext 3.0 (0.05° / 5km & 0.1° / 10km, paso 1h, 250 miembros)."""
-    wn3_path = Path("data/weathernext3_latest.parquet")
-    if not wn3_path.exists():
-        console.print("[bold red]Error:[/bold red] No existe data/weathernext3_latest.parquet. Ejecuta './storm --wn3 --fetch-wn3'.")
-        sys.exit(1)
+    """Renderizado compacto de WeatherNext 3.0 optimizado para celulares / terminales móviles (<60 columnas)."""
+    # 1. Header Compacto
+    header_text = Text()
+    header_text.append("⚡ WEATHERNEXT 3.0 (Mobile 1h)\n", style="bold bright_magenta")
+    header_text.append(f"📍 {preset['name']} • ~{elev_m}m\n", style="bold yellow")
+    header_text.append(f"Corrida: {init_str} • 250 miembros", style="dim")
+    console.print(Panel(header_text, border_style="bright_magenta", box=box.ROUNDED))
 
-    raw_df = pl.read_parquet(wn3_path)
-    clean_key = location_key.lower().replace("-", "_")
-    preset = PRESETS.get(clean_key, PRESETS["casa"])
-    target_5km = preset.get("target_5km", (-33.45, -70.60))
-    elev_m = int(preset.get("base_elev_m", 600))
+    # 2. Resumen Síntesis WN3
+    tz_abbr = "BRT" if clean_key in BRASIL_LOCATIONS else "CLT"
+    iso_risk_tag = "ALTO (>2800m)" if iso_max >= 2800 else ("MODERADO" if iso_max >= 2400 else "NORMAL")
+    iso_risk_style = "bold red" if iso_max >= 2800 else ("bold yellow" if iso_max >= 2400 else "bold green")
 
-    sub = raw_df.filter(
-        (pl.col("lat").round(2) == round(target_5km[0], 2))
-        & (pl.col("lon").round(2) == round(target_5km[1], 2))
-    ).sort("lead_time_hours")
+    summary_text = Text()
+    summary_text.append(f"🌧️ Acumulado ({sub['lead_time_hours'].max()}h • 250m):\n", style="bold cyan")
+    summary_text.append(f"  • ERA5-Head (10km):  {tp_cum_mean:>5.1f} mm ", style="bold white")
+    summary_text.append(f"(P75: {tp_cum_p75:.1f})\n", style="dim")
+    summary_text.append(f"  • IMERG Satélite:    {imerg_cum_mean:>5.1f} mm ", style="bold magenta")
+    summary_text.append(f"(P90: {imerg_cum_p90:.1f})\n\n", style="dim")
 
-    if len(sub) == 0:
-        console.print(f"[bold red]Error:[/bold red] Coordenada 5 km {target_5km} no encontrada en {wn3_path.name}.")
-        sys.exit(1)
+    summary_text.append("⚡ Pico Horario Crítico (1h):\n", style="bold yellow")
+    summary_text.append(f"  • {peak_day_name} {peak_dt_local.strftime(f'%d/%m %H:%M {tz_abbr}')} (+{peak_row['lead_time_hours']}h)\n", style="bold white")
+    summary_text.append(f"  • Intensidad: {peak_row['imerg_1h_p90_mm']:.1f} mm/h (ERA: {peak_row['tp_1h_mean_mm']:.1f})\n\n", style="bold white")
 
-    init_dt = sub["init_time"][0]
-    init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
-    lat_10k = float(sub["lat_10km"][0])
-    lon_10k = float(sub["lon_10km"][0])
+    summary_text.append("🏔️ Mesoescala & Termodinámica:\n", style="bold bright_blue")
+    summary_text.append(f"  • Temp 5km: {t5_min:.1f}°C a {t5_max:.1f}°C\n", style="bold white")
+    summary_text.append(f"  • Iso 0°C:  {iso_min}–{iso_max} m (", style="bold white")
+    summary_text.append(f"{iso_risk_tag}", style=iso_risk_style)
+    summary_text.append(")\n", style="bold white")
+    summary_text.append(f"  • Ráfagas:  {max_gust:.1f} km/h | Pres: {min_pres:.1f} hPa", style="bold white")
 
-    # Cálculo de acumulados reales de 250 miembros (Esperanza matemática lineal = suma de medias horarias)
-    tp_cum_mean = float(sub["tp_1h_mean_mm"].sum()) if "tp_1h_mean_mm" in sub.columns else float(sub["tp_1h_p50_mm"].sum())
-    tp_cum_p75 = float(sub["tp_1h_p75_mm"].sum()) if "tp_1h_p75_mm" in sub.columns else float(sub["tp_1h_p90_mm"].sum() * 0.75)
-    tp_cum_p90 = float(sub["tp_1h_p90_mm"].sum())
-    imerg_cum_mean = float(sub["imerg_1h_mean_mm"].sum()) if "imerg_1h_mean_mm" in sub.columns else float(sub["imerg_1h_p50_mm"].sum())
-    imerg_cum_p90 = float(sub["imerg_1h_p90_mm"].sum())
+    console.print(Panel(summary_text, title="[bold]SÍNTESIS MESOESCALA WN3[/bold]", border_style="cyan", box=box.ROUNDED))
 
-    # Enriquecer con Isoterma 0°C activa usando la temperatura nativa de 5 km (station_head_temperature_2m)
-    sub = sub.with_columns([
-        (pl.lit(float(elev_m)) + pl.col("temp_5km_p50_c") / 0.0065).clip(lower_bound=0.0).round(0).cast(pl.Int64).alias("iso0_5km_m"),
-        pl.max_horizontal(
-            pl.col("wind_100m_p90_kmh") * 1.05,
-            pl.col("wind_10m_p90_kmh") * 1.35,
-            pl.col("wind_10m_p50_kmh") * 1.30 + pl.col("imerg_1h_p90_mm") * 1.2,
-        ).round(1).alias("gust_kmh"),
-    ])
+    # 3. Tabla Diaria WN3
+    daily = sub.with_columns(
+        (pl.col("end_time") + SANTIAGO_TZ_OFFSET).dt.date().alias("fecha_local")
+    ).group_by("fecha_local").agg([
+        pl.col("tp_1h_mean_mm").sum().round(1).alias("era5_mm"),
+        pl.col("imerg_1h_p90_mm").sum().round(1).alias("im90_mm"),
+        pl.col("temp_5km_p50_c").min().round(0).cast(pl.Int64).alias("t_min"),
+        pl.col("temp_5km_p50_c").max().round(0).cast(pl.Int64).alias("t_max"),
+    ]).sort("fecha_local")
 
-    peak_row = sub.sort("imerg_1h_p90_mm", descending=True).row(0, named=True)
-    peak_dt_local = peak_row["end_time"] + SANTIAGO_TZ_OFFSET
-    peak_day_name = SPANISH_WEEKDAYS[peak_dt_local.weekday()]
+    daily_table = Table(
+        title="📅 Lluvia Acumulada por Día",
+        box=box.ROUNDED,
+        header_style="bold magenta",
+        padding=(0, 1),
+        expand=True,
+    )
+    daily_table.add_column("Día", style="bold white", width=11, no_wrap=True)
+    daily_table.add_column("ERA5 / IM90", justify="right", style="bold cyan", width=13, no_wrap=True)
+    daily_table.add_column("T°5k", justify="center", width=8, no_wrap=True)
+    daily_table.add_column("Gráf", justify="center", width=6, no_wrap=True)
 
-    rainy_sub = sub.filter((pl.col("tp_1h_mean_mm") >= 0.25) | (pl.col("imerg_1h_p90_mm") >= 1.0))
-    if len(rainy_sub) > 0:
-        iso_min = int(rainy_sub["iso0_5km_m"].min())
-        iso_max = int(rainy_sub["iso0_5km_m"].max())
+    for d in daily.iter_rows(named=True):
+        f = d["fecha_local"]
+        dia_str = f"{SPANISH_WEEKDAYS[f.weekday()]} {f.day:02d}/{f.month:02d}"
+        era_val = d["era5_mm"]
+        im90_val = d["im90_mm"]
+        p_str = f"{era_val:4.1f}/{im90_val:4.1f}"
+        t_str = f"{d['t_min']}..{d['t_max']}°"
+        bar = render_rain_bar(era_val, max_scale=25.0, width=5)
+        daily_table.add_row(dia_str, p_str, t_str, bar)
+
+    daily_table.add_section()
+    daily_table.add_row(
+        "[bold white]TOTAL[/bold white]",
+        f"[bold cyan]{tp_cum_mean:4.1f}[/bold cyan]/[bold magenta]{imerg_cum_p90:4.1f}[/bold magenta]",
+        f"{t5_min:.0f}..{t5_max:.0f}°",
+        "",
+    )
+    console.print(daily_table)
+
+    # 4. Gradiente Cuenca / Costero WN3 Móvil
+    if clean_key in BRASIL_LOCATIONS:
+        basin_keys = ["rio", "ilha_grande", "angra", "paraty", "buzios"]
+        basin_title = "🗺️ Litoral Carioca & Costa Verde"
+        short_names = {
+            "rio": "Río Copacabana",
+            "rio_de_janeiro": "Río Copacabana",
+            "ilha_grande": "Ilha Grande",
+            "angra": "Angra dos Reis",
+            "paraty": "Paraty",
+            "buzios": "Búzios",
+        }
     else:
-        iso_min = int(sub["iso0_5km_m"].min())
-        iso_max = int(sub["iso0_5km_m"].max())
+        basin_keys = ["poniente", "casa", "trabajo", "pie_andino", "maipo", "cordillera", "rancagua", "valpo"]
+        basin_title = "🗺️ Gradiente Cuenca WN3"
+        short_names = {
+            "poniente": "Stgo Centro",
+            "casa": "Ñuñoa (Casa)",
+            "trabajo": "Las Condes",
+            "pie_andino": "Pie Andino",
+            "maipo": "S.J. Maipo",
+            "cordillera": "Farellones",
+            "rancagua": "Rancagua",
+            "valpo": "Valparaíso",
+        }
 
-    max_gust = float(sub["gust_kmh"].max())
-    min_pres = float(sub["pressure_p50_hpa"].min())
-    t5_min = float(sub["temp_5km_p50_c"].min())
-    t5_max = float(sub["temp_5km_p50_c"].max())
+    basin_table = Table(
+        title=basin_title,
+        box=box.ROUNDED,
+        header_style="bold bright_magenta",
+        padding=(0, 1),
+        expand=True,
+    )
+    basin_table.add_column("Zona", style="bold white", width=14, no_wrap=True)
+    basin_table.add_column("ERA5", justify="right", style="bold cyan", width=7, no_wrap=True)
+    basin_table.add_column("IM90", justify="right", style="bold magenta", width=7, no_wrap=True)
+    basin_table.add_column("T°5k", justify="center", width=8, no_wrap=True)
 
+    for bk in basin_keys:
+        bp = PRESETS[bk]
+        c5 = bp["target_5km"]
+        bsub = raw_df.filter(
+            (pl.col("lat").round(2) == round(c5[0], 2))
+            & (pl.col("lon").round(2) == round(c5[1], 2))
+        )
+        if len(bsub) == 0:
+            continue
+        b_tp = float(bsub["tp_1h_mean_mm"].sum())
+        b_im_90 = float(bsub["imerg_1h_p90_mm"].sum())
+        b_tmin = float(bsub["temp_5km_p50_c"].min())
+        b_tmax = float(bsub["temp_5km_p50_c"].max())
+        marker = "▶" if bk == clean_key else " "
+        name_fmt = f"{marker}{short_names.get(bk, bp['name'][:12])}"
+        basin_table.add_row(
+            name_fmt,
+            f"{b_tp:5.1f}",
+            f"{b_im_90:5.1f}",
+            f"{b_tmin:2.0f}..{b_tmax:2.0f}°",
+        )
+    console.print(basin_table)
+
+    # 5. Cronograma Mesoescala Móvil
+    step_h = 1 if (hourly or (hours is not None and hours <= 36)) else 3
+    max_h = hours if hours is not None else (36 if hourly else 48)
+    sub_h = sub.filter(pl.col("lead_time_hours") <= max_h).with_columns(
+        ((pl.col("lead_time_hours") - 1) // step_h).alias("block_id")
+    )
+    blocks = sub_h.group_by("block_id").agg([
+        pl.col("end_time").last().alias("end_time"),
+        pl.col("lead_time_hours").last().alias("lead_h"),
+        pl.col("tp_1h_mean_mm").sum().round(1).alias("tp_mean"),
+        pl.col("imerg_1h_p90_mm").sum().round(1).alias("im_p90"),
+        pl.col("temp_5km_p50_c").mean().round(0).cast(pl.Int64).alias("t5_c"),
+        pl.col("iso0_5km_m").mean().round(0).cast(pl.Int64).alias("iso0_m"),
+        pl.col("gust_kmh").max().round(0).cast(pl.Int64).alias("gust"),
+    ]).sort("lead_h")
+
+    sched_table = Table(
+        title=f"⏱️ Cronograma {max_h}h (Pasos {step_h}h)",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        padding=(0, 1),
+        pad_edge=False,
+    )
+    sched_table.add_column("Hora", style="bold white", no_wrap=True)
+    sched_table.add_column("ERA/IM", justify="right", style="bold cyan", no_wrap=True)
+    sched_table.add_column("T°/Iso0", justify="center", no_wrap=True)
+    sched_table.add_column("Ráf", justify="right", no_wrap=True)
+    sched_table.add_column("Bar", justify="center", no_wrap=True)
+
+    for r in blocks.iter_rows(named=True):
+        ft_local = r["end_time"] + SANTIAGO_TZ_OFFSET
+        day_name = SPANISH_WEEKDAYS[ft_local.weekday()]
+        local_str = f"{day_name} {ft_local.day:02d} {ft_local.hour:02d}h"
+        tp_m = r["tp_mean"]
+        im_90 = r["im_p90"]
+        bar = render_rain_bar(tp_m, max_scale=4.0 * step_h, width=3)
+        rain_str = f"{tp_m:3.1f}/{im_90:3.1f}" if (tp_m >= 0.1 or im_90 >= 0.2) else "  -  "
+        iso0 = int(r["iso0_m"])
+        is_rainy = tp_m >= 0.25 or im_90 >= 1.0
+        if is_rainy:
+            iso_style = "bold red" if iso0 >= 2800 else ("yellow" if iso0 >= 2400 else "cyan")
+            t_iso = Text(f"{r['t5_c']:2.0f}°/{iso0:4d}m", style=iso_style)
+        else:
+            t_iso = Text(f"{r['t5_c']:2.0f}°/  -  ", style="dim")
+        sched_table.add_row(
+            local_str,
+            rain_str,
+            t_iso,
+            f"{r['gust']:2.0f}k",
+            bar,
+        )
+    console.print(sched_table)
+    if len(sub) > max_h:
+        console.print(f"[dim]ℹ️ Próximas {max_h}h críticas. Ver horizonte completo: '--hours 120'[/dim]\n")
+
+
+def _display_wn3_desktop(
+    sub: pl.DataFrame,
+    raw_df: pl.DataFrame,
+    preset: dict,
+    clean_key: str,
+    target_5km: tuple[float, float],
+    lat_10k: float,
+    lon_10k: float,
+    elev_m: int,
+    init_str: str,
+    tp_cum_mean: float,
+    tp_cum_p75: float,
+    tp_cum_p90: float,
+    imerg_cum_mean: float,
+    imerg_cum_p90: float,
+    peak_row: dict,
+    peak_dt_local: datetime,
+    peak_day_name: str,
+    iso_min: int,
+    iso_max: int,
+    max_gust: float,
+    min_pres: float,
+    t5_min: float,
+    t5_max: float,
+    hours: int | None = None,
+    hourly: bool = False,
+):
+    """Renderizado completo de WeatherNext 3.0 para terminales estándar de escritorio (>=80 columnas)."""
     # Encabezado WeatherNext 3.0
     header_text = Text()
     header_text.append("⚡ WEATHERNEXT 3.0 (HIGH-RES 5km / 10km • 1h • 250 MIEMBROS)\n", style="bold bright_magenta")
@@ -1183,11 +1646,12 @@ def display_wn3_tui(
     console.print(Panel(header_text, border_style="bright_magenta", box=box.ROUNDED))
 
     # Tarjetas Resumen WN3
+    tz_abbr = "BRT" if clean_key in BRASIL_LOCATIONS else "CLT"
     card_accum = Panel(
         f"[bold cyan]ERA5-Head (10km Media 250m):[/bold cyan] [bold white]{tp_cum_mean:.1f} mm[/bold white] [dim](P75: {tp_cum_p75:.1f} mm)[/dim]\n"
         f"[bold bright_magenta]IMERG-Satélite (10km Media):[/bold bright_magenta] [bold white]{imerg_cum_mean:.1f} mm[/bold white] [dim](Suma P90: {imerg_cum_p90:.1f} mm)[/dim]\n"
-        f"[dim]Horizonte: 120 horas (5 días a paso de 1h sin suavizado de 6h)[/dim]",
-        title="🌧️ Acumulado 5 Días (250 Trayectorias WN3)",
+        f"[dim]Horizonte: {sub['lead_time_hours'].max()} horas (paso de 1h sin suavizado)[/dim]",
+        title=f"🌧️ Acumulado {sub['lead_time_hours'].max()}h (250 Trayectorias WN3)",
         border_style="cyan",
         box=box.ROUNDED,
     )
@@ -1195,7 +1659,7 @@ def display_wn3_tui(
     iso_risk_tag = "ALTO (>2800m)" if iso_max >= 2800 else ("MODERADO" if iso_max >= 2400 else "NORMAL (Nieve Andina)")
     iso_risk_style = "bold red" if iso_max >= 2800 else ("bold yellow" if iso_max >= 2400 else "bold green")
     card_meso = Panel(
-        f"[bold magenta]Hora Pico (1h):[/bold magenta] {peak_day_name} {peak_dt_local.strftime('%d/%m %H:%M CLT')} (+{peak_row['lead_time_hours']}h) • "
+        f"[bold magenta]Hora Pico (1h):[/bold magenta] {peak_day_name} {peak_dt_local.strftime(f'%d/%m %H:%M {tz_abbr}')} (+{peak_row['lead_time_hours']}h) • "
         f"[bold]P50: {peak_row['imerg_1h_p50_mm']:.1f} mm/h | P90: {peak_row['imerg_1h_p90_mm']:.1f} mm/h[/bold]\n"
         f"[bold cyan]Temp 5km (Station-Head):[/bold cyan] {t5_min:.1f}°C a {t5_max:.1f}°C | "
         f"[bold]Iso 0°C:[/bold] {iso_min}–{iso_max} m ([{iso_risk_style}]{iso_risk_tag}[/{iso_risk_style}])\n"
@@ -1205,20 +1669,41 @@ def display_wn3_tui(
         box=box.ROUNDED,
     )
 
-    if is_mobile:
-        console.print(card_accum)
-        console.print(card_meso)
-    else:
-        grid = Table.grid(expand=True, padding=(0, 1))
-        grid.add_column(ratio=1)
-        grid.add_column(ratio=1)
-        grid.add_row(card_accum, card_meso)
-        console.print(grid)
+    grid = Table.grid(expand=True, padding=(0, 1))
+    grid.add_column(ratio=1)
+    grid.add_column(ratio=1)
+    grid.add_row(card_accum, card_meso)
+    console.print(grid)
 
-    # Tabla 1: Matriz Microclimática de la Cuenca (5 km / 10 km)
-    basin_keys = ["poniente", "casa", "trabajo", "pie_andino", "maipo", "cordillera", "rancagua", "valpo", "serena"]
+    # Tabla 1: Matriz Microclimática de la Cuenca o Litoral Costero
+    if clean_key in BRASIL_LOCATIONS:
+        basin_keys = ["rio", "ilha_grande", "angra", "paraty", "buzios"]
+        basin_title = "🗺️  Gradiente Costero WeatherNext 3.0 (Río de Janeiro & Costa Verde Fluminense)"
+        short_names = {
+            "rio": "Río Copacabana",
+            "rio_de_janeiro": "Río Copacabana",
+            "ilha_grande": "Ilha Grande (Abraão)",
+            "angra": "Angra dos Reis",
+            "paraty": "Paraty Histórico",
+            "buzios": "Armação dos Búzios",
+        }
+    else:
+        basin_keys = ["poniente", "casa", "trabajo", "pie_andino", "maipo", "cordillera", "rancagua", "valpo", "serena"]
+        basin_title = "🗺️  Gradiente Topográfico WeatherNext 3.0 (Celdas 5 km & 10 km • 5 Días)"
+        short_names = {
+            "poniente": "Stgo Centro/Pon.",
+            "casa": "Ñuñoa (Casa)",
+            "trabajo": "Las Condes",
+            "pie_andino": "Pie Andino(Reina)",
+            "maipo": "San José de Maipo",
+            "cordillera": "Farellones(2400m)",
+            "rancagua": "Rancagua",
+            "valpo": "Valparaíso/Viña",
+            "serena": "La Serena/Coquim.",
+        }
+
     basin_table = Table(
-        title="🗺️  Gradiente Topográfico WeatherNext 3.0 (Celdas 5 km & 10 km • 5 Días)",
+        title=basin_title,
         box=box.SIMPLE_HEAVY,
         header_style="bold bright_magenta",
         padding=(0, 1),
@@ -1292,13 +1777,13 @@ def display_wn3_tui(
     ]).sort("lead_h")
 
     sched_table = Table(
-        title=f"⏱️  Cronograma Mesoescala WeatherNext 3.0 en {preset['name']} (Pasos de {step_h}h)",
+        title=f"⏱️  Cronograma Mesoescala WeatherNext 3.0 en {preset['name']} (Pasos de {step_h}h • Hora {tz_abbr})",
         box=box.SIMPLE_HEAVY,
         header_style="bold cyan",
         padding=(0, 1),
         pad_edge=False,
     )
-    sched_table.add_column("Hora CLT", style="bold white", no_wrap=True)
+    sched_table.add_column(f"Hora {tz_abbr}", style="bold white", no_wrap=True)
     sched_table.add_column("H+", justify="right", style="cyan", no_wrap=True)
     sched_table.add_column("Bar", no_wrap=True)
     sched_table.add_column(f"TP/IM90({step_h}h)", justify="right", style="bold cyan", no_wrap=True)
@@ -1336,6 +1821,139 @@ def display_wn3_tui(
             f"{r['pres']:6.1f}",
         )
     console.print(sched_table)
+
+
+def display_wn3_tui(
+    location_key: str = "casa",
+    is_mobile: bool = False,
+    hours: int | None = None,
+    hourly: bool = False,
+    parquet_path: str | None = None,
+):
+    """Renderiza el dashboard de alta resolución WeatherNext 3.0 (0.05° / 5km & 0.1° / 10km, paso 1h, 250 miembros)."""
+    clean_key = location_key.lower().replace("-", "_")
+    if parquet_path:
+        wn3_path = Path(parquet_path)
+        if not wn3_path.exists():
+            console.print(f"[bold red]Error:[/bold red] No existe {parquet_path}.")
+            sys.exit(1)
+    elif clean_key in BRASIL_LOCATIONS:
+        wn3_path = Path("data/weathernext3_rio_latest.parquet")
+        if not wn3_path.exists():
+            console.print("[bold red]Error:[/bold red] No existe data/weathernext3_rio_latest.parquet. Ejecuta './storm --fetch-rio'.")
+            sys.exit(1)
+    else:
+        wn3_path = Path("data/weathernext3_latest.parquet")
+        if not wn3_path.exists():
+            console.print("[bold red]Error:[/bold red] No existe data/weathernext3_latest.parquet. Ejecuta './storm --wn3 --fetch-wn3'.")
+            sys.exit(1)
+
+    raw_df = pl.read_parquet(wn3_path)
+    preset = PRESETS.get(clean_key, PRESETS["casa"])
+    target_5km = preset.get("target_5km", (-33.45, -70.60))
+    elev_m = int(preset.get("base_elev_m", 600))
+
+    sub = raw_df.filter(
+        (pl.col("lat").round(2) == round(target_5km[0], 2))
+        & (pl.col("lon").round(2) == round(target_5km[1], 2))
+    ).sort("lead_time_hours")
+
+    if len(sub) == 0:
+        console.print(f"[bold red]Error:[/bold red] Coordenada 5 km {target_5km} no encontrada en {wn3_path.name}.")
+        sys.exit(1)
+
+    init_dt = sub["init_time"][0]
+    init_str = init_dt.strftime("%Y-%m-%d %H:%M UTC") if isinstance(init_dt, datetime) else str(init_dt)[:16]
+    lat_10k = float(sub["lat_10km"][0])
+    lon_10k = float(sub["lon_10km"][0])
+
+    # Cálculo de acumulados reales de 250 miembros (Esperanza matemática lineal = suma de medias horarias)
+    tp_cum_mean = float(sub["tp_1h_mean_mm"].sum()) if "tp_1h_mean_mm" in sub.columns else float(sub["tp_1h_p50_mm"].sum())
+    tp_cum_p75 = float(sub["tp_1h_p75_mm"].sum()) if "tp_1h_p75_mm" in sub.columns else float(sub["tp_1h_p90_mm"].sum() * 0.75)
+    tp_cum_p90 = float(sub["tp_1h_p90_mm"].sum())
+    imerg_cum_mean = float(sub["imerg_1h_mean_mm"].sum()) if "imerg_1h_mean_mm" in sub.columns else float(sub["imerg_1h_p50_mm"].sum())
+    imerg_cum_p90 = float(sub["imerg_1h_p90_mm"].sum())
+
+    # Enriquecer con Isoterma 0°C activa usando la temperatura nativa de 5 km (station_head_temperature_2m)
+    sub = sub.with_columns([
+        (pl.lit(float(elev_m)) + pl.col("temp_5km_p50_c") / 0.0065).clip(lower_bound=0.0).round(0).cast(pl.Int64).alias("iso0_5km_m"),
+        pl.max_horizontal(
+            pl.col("wind_100m_p90_kmh") * 1.05,
+            pl.col("wind_10m_p90_kmh") * 1.35,
+            pl.col("wind_10m_p50_kmh") * 1.30 + pl.col("imerg_1h_p90_mm") * 1.2,
+        ).round(1).alias("gust_kmh"),
+    ])
+
+    peak_row = sub.sort("imerg_1h_p90_mm", descending=True).row(0, named=True)
+    peak_dt_local = peak_row["end_time"] + SANTIAGO_TZ_OFFSET
+    peak_day_name = SPANISH_WEEKDAYS[peak_dt_local.weekday()]
+
+    rainy_sub = sub.filter((pl.col("tp_1h_mean_mm") >= 0.25) | (pl.col("imerg_1h_p90_mm") >= 1.0))
+    if len(rainy_sub) > 0:
+        iso_min = int(rainy_sub["iso0_5km_m"].min())
+        iso_max = int(rainy_sub["iso0_5km_m"].max())
+    else:
+        iso_min = int(sub["iso0_5km_m"].min())
+        iso_max = int(sub["iso0_5km_m"].max())
+
+    max_gust = float(sub["gust_kmh"].max())
+    min_pres = float(sub["pressure_p50_hpa"].min())
+    t5_min = float(sub["temp_5km_p50_c"].min())
+    t5_max = float(sub["temp_5km_p50_c"].max())
+
+    if is_mobile:
+        _display_wn3_mobile(
+            sub=sub,
+            raw_df=raw_df,
+            preset=preset,
+            clean_key=clean_key,
+            elev_m=elev_m,
+            init_str=init_str,
+            tp_cum_mean=tp_cum_mean,
+            tp_cum_p75=tp_cum_p75,
+            tp_cum_p90=tp_cum_p90,
+            imerg_cum_mean=imerg_cum_mean,
+            imerg_cum_p90=imerg_cum_p90,
+            peak_row=peak_row,
+            peak_dt_local=peak_dt_local,
+            peak_day_name=peak_day_name,
+            iso_min=iso_min,
+            iso_max=iso_max,
+            max_gust=max_gust,
+            min_pres=min_pres,
+            t5_min=t5_min,
+            t5_max=t5_max,
+            hours=hours,
+            hourly=hourly,
+        )
+    else:
+        _display_wn3_desktop(
+            sub=sub,
+            raw_df=raw_df,
+            preset=preset,
+            clean_key=clean_key,
+            target_5km=target_5km,
+            lat_10k=lat_10k,
+            lon_10k=lon_10k,
+            elev_m=elev_m,
+            init_str=init_str,
+            tp_cum_mean=tp_cum_mean,
+            tp_cum_p75=tp_cum_p75,
+            tp_cum_p90=tp_cum_p90,
+            imerg_cum_mean=imerg_cum_mean,
+            imerg_cum_p90=imerg_cum_p90,
+            peak_row=peak_row,
+            peak_dt_local=peak_dt_local,
+            peak_day_name=peak_day_name,
+            iso_min=iso_min,
+            iso_max=iso_max,
+            max_gust=max_gust,
+            min_pres=min_pres,
+            t5_min=t5_min,
+            t5_max=t5_max,
+            hours=hours,
+            hourly=hourly,
+        )
 
 
 def display_tui(
@@ -1404,6 +2022,11 @@ def main():
     parser.add_argument("--fetch", action="store_true", help="Extraer primero el snapshot más reciente de WeatherNext 2 desde BigQuery")
     parser.add_argument("--wn3", "-3", action="store_true", help="Usar WeatherNext 3.0 (0.05°/5km & 0.1°/10km, paso 1h, 250 miembros)")
     parser.add_argument("--fetch-wn3", action="store_true", help="Extraer primero la última corrida de WeatherNext 3.0 desde GCS Zarr v3")
+    parser.add_argument("--wn3-mobile", "-3m", action="store_true", help="Acceso directo a WeatherNext 3.0 en formato celular (<60 columnas)")
+    parser.add_argument("--fetch-rio", action="store_true", help="Extraer corrida de WeatherNext 3.0 para Río de Janeiro & Ilha Grande")
+    parser.add_argument("--vacaciones", "--trip", dest="vacaciones", action="store_true", help="Modo Vacaciones: Itinerario interactivo Río de Janeiro & Ilha Grande")
+    parser.add_argument("--app", action="store_true", help="Abrir la App del Clima visual con Índice de Caipirinha & Playa")
+    parser.add_argument("--desktop", action="store_true", help="Forzar vista de escritorio extendida")
 
     # Modos de ubicación
     parser.add_argument("--casa", action="store_true", help="Pronóstico para Ñuñoa (Casa)")
@@ -1413,44 +2036,52 @@ def main():
     parser.add_argument("--pie-andino", action="store_true", help="Pronóstico para Pie Andino (La Reina / Peñalolén)")
     parser.add_argument("--maipo", action="store_true", help="Pronóstico para San José de Maipo (Cajón del Maipo)")
     parser.add_argument("--norte", action="store_true", help="Pronóstico para Santiago Norte (Chicureo / Colina)")
-    parser.add_argument("--lugar", "-l", help="Alias de ubicación (casa, trabajo, poniente, pie_andino, maipo, cordillera, valpo, rancagua, serena)", default=None)
+    parser.add_argument("--rio", action="store_true", help="Pronóstico para Río de Janeiro (Copacabana/Ipanema)")
+    parser.add_argument("--ilha-grande", dest="ilha_grande", action="store_true", help="Pronóstico para Ilha Grande (Vila do Abraão)")
+    parser.add_argument("--angra", action="store_true", help="Pronóstico para Angra dos Reis (Puerto Ferry)")
+    parser.add_argument("--paraty", action="store_true", help="Pronóstico para Paraty (Costa Verde)")
+    parser.add_argument("--buzios", action="store_true", help="Pronóstico para Armação dos Búzios")
+    parser.add_argument("--lugar", "-l", help="Alias de ubicación (casa, trabajo, poniente, pie_andino, maipo, cordillera, valpo, rancagua, serena, rio, ilha_grande, angra, paraty, buzios)", default=None)
     parser.add_argument("--commute", "-c", action="store_true", help="Modo especial de Traslado Diario (Ñuñoa ⇄ Las Condes)")
     parser.add_argument("--clusters", "-k", action="store_true", help="Analizar clusters temporales de miembros para el pico del temporal")
 
-    args = parser.parse_args()
+    # Soporte amigable para subcomandos posicionales (ej. './storm fetch', './storm rio', './storm vacaciones')
+    normalized_argv = []
+    for arg in sys.argv[1:]:
+        if arg in ("fetch", "fetch-rio", "fetch-wn3"):
+            normalized_argv.append(f"--{arg}")
+        elif arg in ("rio", "ilha-grande", "angra", "paraty", "buzios", "casa", "trabajo", "vacaciones", "app"):
+            normalized_argv.append(f"--{arg}")
+        else:
+            normalized_argv.append(arg)
+
+    args = parser.parse_args(normalized_argv)
+
+    if args.wn3_mobile:
+        args.wn3 = True
+        args.mobile = True
 
     # Detección automática o explícita de terminal móvil
     global console
-    is_mobile = args.mobile or (console.is_terminal and console.width < 68)
+    is_mobile = args.mobile or console.width < 68
     if is_mobile:
         target_width = 50 if (args.mobile and console.width >= 68) else console.width
         console = Console(width=target_width, height=console.size.height or 40)
     elif console.width < 96:
-        console = Console(width=96)
+        console = Console(width=96, height=console.size.height or 40)
 
-    if args.fetch:
-        if args.wn3:
-            console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0 (5km/10km) desde GCS Zarr v3...[/bold bright_magenta]")
-            from query_weathernext3 import extract_weathernext3
-            extract_weathernext3(hours=args.hours or 120)
-        else:
-            console.print("[bold yellow]Extrayendo última corrida de WeatherNext 2 desde BigQuery...[/bold yellow]")
-            from query_weathernext import fetch_weather_data
-            fetch_weather_data()
-
-    if args.fetch_wn3 and not (args.fetch and args.wn3):
-        console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0 (5km/10km) desde GCS Zarr v3...[/bold bright_magenta]")
-        from query_weathernext3 import extract_weathernext3
-        extract_weathernext3(hours=args.hours or 120)
-
-    # Si se pide el modo commute
-    if args.commute:
-        raw_df, _ = load_latest_snapshot(args.file)
-        display_commute_view(raw_df, is_mobile=is_mobile)
-        return
-
-    # Determinar lugar
-    if args.trabajo:
+    # Determinar lugar antes de la extracción para enrutar correctamente las descargas
+    if args.rio:
+        loc = "rio"
+    elif args.ilha_grande:
+        loc = "ilha_grande"
+    elif args.angra:
+        loc = "angra"
+    elif args.paraty:
+        loc = "paraty"
+    elif args.buzios:
+        loc = "buzios"
+    elif args.trabajo:
         loc = "trabajo"
     elif args.poniente:
         loc = "poniente"
@@ -1464,8 +2095,40 @@ def main():
         loc = "norte"
     elif args.lugar:
         loc = args.lugar
+    elif args.fetch_rio:
+        loc = "rio"
     else:
-        loc = "casa" # Ñuñoa por defecto
+        loc = "casa"  # Ñuñoa por defecto
+
+    # Si la ubicación es de Brasil, activar automáticamente WeatherNext 3.0
+    if loc.lower().replace("-", "_") in BRASIL_LOCATIONS:
+        args.wn3 = True
+
+    # Ejecutar extracción si fue solicitada (enrutando inteligentemente por ubicación)
+    if args.fetch_rio or (args.fetch and loc.lower().replace("-", "_") in BRASIL_LOCATIONS):
+        console.print("[bold bright_magenta]Extrayendo WeatherNext 3.0 para Río de Janeiro & Ilha Grande desde GCS Zarr v3...[/bold bright_magenta]")
+        from query_weathernext3 import extract_weathernext3_rio
+        extract_weathernext3_rio(hours=args.hours or 216)
+    elif args.fetch:
+        if args.wn3:
+            console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0 (5km/10km) desde GCS Zarr v3...[/bold bright_magenta]")
+            from query_weathernext3 import extract_weathernext3
+            extract_weathernext3(hours=args.hours or 120)
+        else:
+            console.print("[bold yellow]Extrayendo última corrida de WeatherNext 2 desde BigQuery...[/bold yellow]")
+            from query_weathernext import fetch_weather_data
+            fetch_weather_data()
+    elif args.fetch_wn3:
+        console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0 (5km/10km) desde GCS Zarr v3...[/bold bright_magenta]")
+        from query_weathernext3 import extract_weathernext3
+        extract_weathernext3(hours=args.hours or 120)
+
+    # Si se pide la app del clima visual con índice de caipirinha
+    if args.app:
+        from weather_app import display_weather_app
+        app_mobile = not getattr(args, 'desktop', False)
+        display_weather_app(location_key=loc, is_mobile=app_mobile)
+        return
 
     # Si se pide el modo clusters de miembros
     if args.clusters:
@@ -1478,7 +2141,13 @@ def main():
         return
 
     if args.wn3 or args.fetch_wn3:
-        display_wn3_tui(location_key=loc, is_mobile=is_mobile, hours=args.hours, hourly=args.hourly)
+        display_wn3_tui(
+            location_key=loc,
+            is_mobile=is_mobile,
+            hours=args.hours,
+            hourly=args.hourly,
+            parquet_path=args.file,
+        )
         return
 
     display_tui(

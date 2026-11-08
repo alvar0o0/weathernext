@@ -7,9 +7,16 @@ y comparación paralela (Doble Entrada): Medidor Local vs. BigQuery Oficial en S
 
 import argparse
 import os
+import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Ensure IPv4 resolution to prevent IPv6 blackhole stalls on GCP endpoints
+_orig_getaddrinfo = socket.getaddrinfo
+def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+socket.getaddrinfo = _getaddrinfo_ipv4
 
 from usage_tracker import (
     DB_DEFAULT_PATH,

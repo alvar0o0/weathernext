@@ -79,19 +79,30 @@ def load_wn3_config(config_path: str = "config.ini") -> dict:
     }
 
 
-def resolve_latest_wn3_init_time(client: bigquery.Client, cfg: dict) -> tuple[datetime, str]:
+def resolve_latest_wn3_init_time(
+    client: bigquery.Client,
+    cfg: dict,
+    min_hours: int = 120,
+) -> tuple[datetime, str]:
     """
     Detecta la última corrida común de WeatherNext 3.0 en ambas vistas (0.05° y 0.1°)
     mediante consulta podada espacialmente (costo 20 MB) y registra el consumo en el medidor
     local para conciliación exacta contra BigQuery.
+
+    Si min_hours > 48, filtra estrictamente corridas sinópticas principales
+    (00:00, 06:00, 12:00, 18:00 UTC) que contienen 360 horas de pronóstico,
+    evitando que corridas horarias cortas (48h) trunquen el horizonte solicitado.
     """
+    synoptic_filter = "AND MOD(EXTRACT(HOUR FROM init_time), 6) = 0" if min_hours > 48 else ""
     q = f"""
     SELECT
       (SELECT MAX(init_time) FROM `{cfg['project_id']}.{cfg['dataset']}.{cfg['table_0p05']}` 
-       WHERE init_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR) 
+       WHERE init_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+         {synoptic_filter}
          AND ST_DWITHIN(geography, ST_GEOGPOINT(-70.60, -33.45), 15000)) as max_05,
       (SELECT MAX(init_time) FROM `{cfg['project_id']}.{cfg['dataset']}.{cfg['table_0p1']}` 
-       WHERE init_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR) 
+       WHERE init_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+         {synoptic_filter}
          AND ST_DWITHIN(geography, ST_GEOGPOINT(-70.60, -33.45), 15000)) as max_10
     """
     job = client.query(q, job_config=bigquery.QueryJobConfig(use_query_cache=True))
@@ -256,6 +267,7 @@ def build_wn3_bigquery_sql(
 def extract_weathernext3_bq(
     hours: int | None = None,
     is_rio: bool = False,
+    force: bool = False,
     config_path: str = "config.ini",
 ) -> str:
     """Extrae corrida de WeatherNext 3.0 para Chile o Brasil mediante BigQuery SQL columnar."""
@@ -265,9 +277,31 @@ def extract_weathernext3_bq(
     h = hours or default_h
     client = get_bigquery_client(config_path)
 
-    init_dt, init_str = resolve_latest_wn3_init_time(client, cfg)
+    init_dt, init_str = resolve_latest_wn3_init_time(client, cfg, min_hours=h)
     region_label = "Brasil (Río & Ilha Grande)" if is_rio else "Chile"
     color = "bright_magenta" if is_rio else "cyan"
+
+    prefix = "weathernext3_rio" if is_rio else "weathernext3"
+    out_dir = Path("data")
+    out_latest = out_dir / f"{prefix}_latest.parquet"
+
+    # Smart Skip: Evitar re-descargas costosas si la corrida en disco ya es la más reciente
+    if not force and out_latest.exists():
+        try:
+            df_local = pl.read_parquet(out_latest, columns=["init_time", "lead_time_hours"])
+            if len(df_local) > 0:
+                local_init = df_local["init_time"][0]
+                local_max_h = int(df_local["lead_time_hours"].max())
+                if isinstance(local_init, datetime) and local_init == init_dt and local_max_h >= h:
+                    console.print(
+                        f"[bold green]✨ Ya tienes la corrida más reciente en disco ({region_label}):[/bold green] "
+                        f"[bold yellow]{init_str}[/bold yellow] ({local_max_h}h disponibles). "
+                        f"[dim]Omitiendo descarga BigQuery (usa --force para re-descargar).[/dim]"
+                    )
+                    return str(out_latest)
+        except Exception:
+            pass
+
     console.print(f"[bold {color}]🚀 WeatherNext 3.0 BigQuery Extractor ({region_label}):[/bold {color}] Corrida [bold yellow]{init_str}[/bold yellow] ({h} horas)")
 
     sql = build_wn3_bigquery_sql(cfg, init_str, is_rio=is_rio, hours=h)
@@ -288,12 +322,9 @@ def extract_weathernext3_bq(
         timestamp=datetime.now(timezone.utc),
     )
 
-    out_dir = Path("data")
     out_dir.mkdir(parents=True, exist_ok=True)
     ts_str = datetime.now().strftime("%Y%m%d-%H%M")
-    prefix = "weathernext3_rio" if is_rio else "weathernext3"
     out_ts = out_dir / f"{prefix}_{ts_str}.parquet"
-    out_latest = out_dir / f"{prefix}_latest.parquet"
 
     df.write_parquet(out_ts)
     df.write_parquet(out_latest)
@@ -310,6 +341,7 @@ def extract_weathernext3_entry(
     hours: int | None = None,
     is_rio: bool = False,
     source: str | None = None,
+    force: bool = False,
     config_path: str = "config.ini",
 ) -> str:
     """Enrutador de extracción unificado que selecciona entre BigQuery SQL y fallback GCS Zarr v3."""
@@ -325,7 +357,7 @@ def extract_weathernext3_entry(
     else:
         # Por defecto: BigQuery nativo (rápido, filtrado y con telemetría completa)
         try:
-            return extract_weathernext3_bq(hours=hours, is_rio=is_rio, config_path=config_path)
+            return extract_weathernext3_bq(hours=hours, is_rio=is_rio, force=force, config_path=config_path)
         except Exception as e:
             console.print(f"[bold yellow]⚠️ Aviso:[/bold yellow] Extracción BigQuery falló ({e}). Recurriendo a fallback Zarr v3...")
             from zarr_wn3_fallback import extract_weathernext3, extract_weathernext3_rio
@@ -340,5 +372,6 @@ if __name__ == "__main__":
     parser.add_argument("--hours", type=int, default=None, help="Horizonte horario (defecto: según config.ini)")
     parser.add_argument("--rio", "--brasil", "--vacaciones", dest="rio", action="store_true", help="Extraer pronóstico de Río de Janeiro & Ilha Grande")
     parser.add_argument("--source", choices=["bq", "zarr"], default=None, help="Motor de extracción: bq (BigQuery SQL) o zarr (GCS Zarr v3)")
+    parser.add_argument("--force", action="store_true", help="Forzar re-descarga de la corrida aunque ya exista en disco")
     args = parser.parse_args()
-    extract_weathernext3_entry(hours=args.hours, is_rio=args.rio, source=args.source)
+    extract_weathernext3_entry(hours=args.hours, is_rio=args.rio, source=args.source, force=args.force)

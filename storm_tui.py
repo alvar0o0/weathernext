@@ -2023,6 +2023,7 @@ def main():
     parser.add_argument("--wn3", "-3", action="store_true", help="Usar WeatherNext 3.0 (0.05°/5km & 0.1°/10km, paso 1h, 250 miembros)")
     parser.add_argument("--fetch-wn3", action="store_true", help="Extraer primero la última corrida de WeatherNext 3.0 (BigQuery / GCS Zarr v3)")
     parser.add_argument("--source", choices=["bq", "zarr"], default=None, help="Motor de extracción de WeatherNext 3.0: bq (BigQuery nativo, por defecto) o zarr (GCS Zarr v3)")
+    parser.add_argument("--force", action="store_true", help="Forzar re-descarga de la corrida de WeatherNext 3.0 aunque ya exista en disco")
     parser.add_argument("--wn3-mobile", "-3m", action="store_true", help="Acceso directo a WeatherNext 3.0 en formato celular (<60 columnas)")
     parser.add_argument("--fetch-rio", action="store_true", help="Extraer corrida de WeatherNext 3.0 para Río de Janeiro & Ilha Grande")
     parser.add_argument("--vacaciones", "--trip", dest="vacaciones", action="store_true", help="Modo Vacaciones: Itinerario interactivo Río de Janeiro & Ilha Grande")
@@ -2109,12 +2110,12 @@ def main():
     if args.fetch_rio or (args.fetch and loc.lower().replace("-", "_") in BRASIL_LOCATIONS):
         console.print("[bold bright_magenta]Extrayendo WeatherNext 3.0 para Río de Janeiro & Ilha Grande...[/bold bright_magenta]")
         from query_weathernext3 import extract_weathernext3_entry
-        extract_weathernext3_entry(hours=args.hours, is_rio=True, source=args.source)
+        extract_weathernext3_entry(hours=args.hours, is_rio=True, source=args.source, force=args.force)
     elif args.fetch:
         if args.wn3:
             console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0...[/bold bright_magenta]")
             from query_weathernext3 import extract_weathernext3_entry
-            extract_weathernext3_entry(hours=args.hours, is_rio=False, source=args.source)
+            extract_weathernext3_entry(hours=args.hours, is_rio=False, source=args.source, force=args.force)
         else:
             console.print("[bold yellow]Extrayendo última corrida de WeatherNext 2 desde BigQuery...[/bold yellow]")
             from query_weathernext import fetch_weather_data
@@ -2122,7 +2123,7 @@ def main():
     elif args.fetch_wn3:
         console.print("[bold bright_magenta]Extrayendo última corrida de WeatherNext 3.0...[/bold bright_magenta]")
         from query_weathernext3 import extract_weathernext3_entry
-        extract_weathernext3_entry(hours=args.hours, is_rio=False, source=args.source)
+        extract_weathernext3_entry(hours=args.hours, is_rio=False, source=args.source, force=args.force)
 
     # Si se pide la app del clima visual con índice de caipirinha
     if args.app:

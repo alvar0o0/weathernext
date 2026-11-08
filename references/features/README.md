@@ -69,7 +69,7 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
 
 ## 5. Extractor y Analizador de Alta Resolución WeatherNext 3.0 (5 km / 10 km • Paso 1h • 250 Miembros • BigQuery & Zarr v3)
 * **Descripción**: Motor de extracción y visualización dual de alta resolución que combina:
-  1. **BigQuery SQL Columnar (Nativo via Analytics Hub)**: Consulta de alto rendimiento sobre las vistas suscritas `weathernext_3_0_0_0p1deg` (10 km sinóptico) y `weathernext_3_0_0_0p05deg` (5 km cabezal de estaciones) de WeatherNext 3.0. Detección automática y dual de la última corrida sincrónica (`init_time`) podada a 20 MB y conciliada en el medidor local, filtrado en SQL exactamente por las coordenadas de los presets activos (~500 a 1.300 filas en vez de 80.000, reduciendo el peso de red en 60x), `INNER JOIN` espacial con índice entero canónico `(i10, j10)` para sortear discrepancias flotantes IEEE 754 de `ST_Y`, extracción de 26 columnas físicas (temperaturas 5km/10km, precipitación calibrada ERA5 e IMERG a 1h en percentiles p50/p75/p90/mean, ráfagas y viento a 10m y 100m, presión MSL, nubosidad total y baja TCC/LCC, radiación solar SSRD/FDIR y punto de rocío), autenticación transparente con Application Default Credentials (ADC) directo en 0.5s sin round-trips fallidos, y registro local de telemetría en `data/usage.db` (~140 a 290 MB facturados por extracción completa de 5 a 9 días, en ~9-14 segundos).
+  1. **BigQuery SQL Columnar (Nativo via Analytics Hub)**: Consulta de alto rendimiento sobre las vistas suscritas `weathernext_3_0_0_0p1deg` (10 km sinóptico) y `weathernext_3_0_0_0p05deg` (5 km cabezal de estaciones) de WeatherNext 3.0. Detección automática y dual de la última corrida sincrónica (`init_time`) con selección estricta de corridas sinópticas principales (360h en 00, 06, 12, 18 UTC) cuando el horizonte solicitado supera 48h, Smart Skip inteligente e idempotente que omite descargas redundantes si la corrida ya existe en disco (con bypass vía `--force`), podada a 20 MB y conciliada en el medidor local, filtrado en SQL exactamente por las coordenadas de los presets activos (~500 a 1.300 filas en vez de 80.000, reduciendo el peso de red en 60x), `INNER JOIN` espacial con índice entero canónico `(i10, j10)` para sortear discrepancias flotantes IEEE 754 de `ST_Y`, extracción de 26 columnas físicas (temperaturas 5km/10km, precipitación calibrada ERA5 e IMERG a 1h en percentiles p50/p75/p90/mean, ráfagas y viento a 10m y 100m, presión MSL, nubosidad total y baja TCC/LCC, radiación solar SSRD/FDIR y punto de rocío), autenticación transparente con Application Default Credentials (ADC) directo en 0.5s sin round-trips fallidos, y registro local de telemetría en `data/usage.db` (~140 a 290 MB facturados por extracción completa de 5 a 9 días, en ~9-14 segundos).
   2. **GCS Zarr v3 (Fallback HTTP Range / C Decompressor)**: Descarga binaria directa contra `gs://weathernext3_statistics_spatial` (costo $0) con streaming decompresor en C (`libzstd.so.1` vía `ctypes`), completamente desacoplada en el submódulo [`zarr_wn3_fallback.py`](../../zarr_wn3_fallback.py) con *lazy import*.
 * **Componentes**: [`query_weathernext3.py`](../../query_weathernext3.py), [`zarr_wn3_fallback.py`](../../zarr_wn3_fallback.py), [`storm_tui.py`](../../storm_tui.py), [`storm`](../../storm), [`meter.py`](../../meter.py), [`usage_tracker.py`](../../usage_tracker.py).
 * **Comandos de Verificación**:
@@ -91,11 +91,13 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ./storm --wn3 --maipo --hours 36
   ./storm --wn3 --cordillera --hours 36
 
-  # Extraer última corrida de WeatherNext 3.0 para Chile vía BigQuery (por defecto):
+  # Extraer última corrida de WeatherNext 3.0 para Chile vía BigQuery (Smart Skip automático si ya existe):
   ./storm --fetch-wn3
-  # o explícitamente:
-  ./storm --fetch-wn3 --source bq
+  # Forzar re-descarga de la corrida:
+  ./storm --fetch-wn3 --force
+  # o explícitamente vía CLI:
   uv run python query_weathernext3.py
+  uv run python query_weathernext3.py --force
 
   # Extraer vía fallback GCS Zarr v3:
   ./storm --fetch-wn3 --source zarr
@@ -103,9 +105,10 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
 
   # Extraer última corrida de WeatherNext 3.0 para Brasil (Río & Ilha Grande) vía BigQuery:
   ./storm --fetch-rio
+  ./storm --fetch-rio --force
   # o explícitamente:
-  ./storm --fetch-rio --source bq
   uv run python query_weathernext3.py --rio
+  uv run python query_weathernext3.py --rio --force
 
   # Auditar y conciliar jobs de BigQuery con el medidor local:
   ./meter

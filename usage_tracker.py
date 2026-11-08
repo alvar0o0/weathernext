@@ -84,11 +84,24 @@ def record_local_usage(
 
 def sync_from_bigquery(client, db_path: Path = DB_DEFAULT_PATH) -> int:
     """
-    Sincroniza el registro oficial de BigQuery consultando INFORMATION_SCHEMA.JOBS_BY_USER
-    (costo 0 bytes) y actualiza las columnas de BigQuery en la base de datos local.
+    Sincroniza el registro oficial de BigQuery consultando INFORMATION_SCHEMA.JOBS_BY_PROJECT
+    (con fallback a JOBS_BY_USER si no hay permisos de proyecto) a costo 0 bytes y actualiza
+    las columnas de BigQuery en la base de datos local.
     Retorna la cantidad de jobs sincronizados.
     """
-    sql = """
+    sql_project = """
+        SELECT 
+            job_id,
+            creation_time,
+            total_bytes_billed,
+            total_bytes_processed,
+            state
+        FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+        WHERE job_type = 'QUERY'
+        ORDER BY creation_time DESC
+        LIMIT 1000
+    """
+    sql_user = """
         SELECT 
             job_id,
             creation_time,
@@ -100,8 +113,12 @@ def sync_from_bigquery(client, db_path: Path = DB_DEFAULT_PATH) -> int:
         ORDER BY creation_time DESC
         LIMIT 1000
     """
-    query_job = client.query(sql)
-    rows = list(query_job.result())
+    try:
+        query_job = client.query(sql_project)
+        rows = list(query_job.result())
+    except Exception:
+        query_job = client.query(sql_user)
+        rows = list(query_job.result())
 
     conn = get_db_connection(db_path)
     now_iso = datetime.now(timezone.utc).isoformat()

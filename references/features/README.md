@@ -67,9 +67,11 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
 
 ---
 
-## 5. Extractor y Analizador de Alta Resolución WeatherNext 3.0 (5 km / 10 km • Paso 1h • 250 Miembros)
-* **Descripción**: Pipeline Zarr v3 directo contra `gs://weathernext3_statistics_spatial` (sin *requester-pays*, costo $0) que sortea el límite de 1.000 suscriptores de BigQuery Analytics Hub usando peticiones HTTP `Range` combinadas con descompresión parcial en streaming vía `libzstd.so.1` (`ZSTD_decompressStream`). Extrae precipitación horaria calibrada por ERA5 (`total_precipitation_1hr`) y satélite (`imerg_tp_1hr`) a `0.1°` (~10 km), viento a 100m/10m, presión MSL y el cabezal topográfico de estaciones `station_head_temperature_2m` a `0.05°` (~5 km).
-* **Componentes**: [`query_weathernext3.py`](../../query_weathernext3.py), [`storm_tui.py`](../../storm_tui.py), [`storm`](../../storm).
+## 5. Extractor y Analizador de Alta Resolución WeatherNext 3.0 (5 km / 10 km • Paso 1h • 250 Miembros • BigQuery & Zarr v3)
+* **Descripción**: Motor de extracción y visualización dual de alta resolución que combina:
+  1. **BigQuery SQL Columnar (Nativo via Analytics Hub)**: Consulta de alto rendimiento sobre las vistas suscritas `weathernext_3_0_0_0p1deg` (10 km sinóptico) y `weathernext_3_0_0_0p05deg` (5 km cabezal de estaciones) de WeatherNext 3.0. Detección automática de la última corrida (`init_time`) podada a 10 MB, `INNER JOIN` espacial con índice entero canónico `(i10, j10)` para sortear discrepancias flotantes IEEE 754 de `ST_Y`, extracción de 26 columnas físicas (temperaturas 5km/10km, precipitación calibrada ERA5 e IMERG a 1h en percentiles p50/p75/p90/mean, ráfagas y viento a 10m y 100m, presión MSL, nubosidad total y baja TCC/LCC, radiación solar SSRD/FDIR y punto de rocío), autenticación transparente con Application Default Credentials (ADC) o Service Account, y registro local de telemetría en `data/usage.db` (~130 a 240 MB facturados por extracción completa de 5 a 9 días, en 10-25 segundos).
+  2. **GCS Zarr v3 (Fallback HTTP Range / C Decompressor)**: Descarga binaria directa contra `gs://weathernext3_statistics_spatial` (costo $0) con streaming decompresor en C (`libzstd.so.1` vía `ctypes`).
+* **Componentes**: [`query_weathernext3.py`](../../query_weathernext3.py), [`storm_tui.py`](../../storm_tui.py), [`storm`](../../storm), [`meter.py`](../../meter.py), [`usage_tracker.py`](../../usage_tracker.py).
 * **Comandos de Verificación**:
   ```bash
   # Visualizar dashboard WeatherNext 3.0 hora a hora (paso de 1h)
@@ -89,9 +91,24 @@ Este documento registra los flujos de usuario, componentes y comandos de verific
   ./storm --wn3 --maipo --hours 36
   ./storm --wn3 --cordillera --hours 36
 
-  # Extraer nueva corrida de WeatherNext 3.0 desde GCS Zarr v3 (con barra de progreso en vivo)
-  ./storm --wn3 --fetch
+  # Extraer última corrida de WeatherNext 3.0 para Chile vía BigQuery (por defecto):
   ./storm --fetch-wn3
+  # o explícitamente:
+  ./storm --fetch-wn3 --source bq
+  uv run python query_weathernext3.py
+
+  # Extraer vía fallback GCS Zarr v3:
+  ./storm --fetch-wn3 --source zarr
+  uv run python query_weathernext3.py --source zarr
+
+  # Extraer última corrida de WeatherNext 3.0 para Brasil (Río & Ilha Grande) vía BigQuery:
+  ./storm --fetch-rio
+  # o explícitamente:
+  ./storm --fetch-rio --source bq
+  uv run python query_weathernext3.py --rio
+
+  # Auditar y conciliar jobs de BigQuery con el medidor local:
+  ./meter
   ```
 
 ---

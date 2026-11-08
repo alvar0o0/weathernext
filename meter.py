@@ -36,7 +36,7 @@ def render_progress_bar(percent: float, width: int = 32) -> str:
 
 
 def get_bigquery_client(config_path: str = "config.ini"):
-    """Intenta inicializar el cliente BigQuery para sincronización."""
+    """Intenta inicializar el cliente BigQuery para sincronización, priorizando o haciendo fallback a ADC."""
     import configparser
     from google.cloud import bigquery
     from google.oauth2 import service_account
@@ -48,12 +48,17 @@ def get_bigquery_client(config_path: str = "config.ini"):
     creds_file = cfg.get("GCP", "credentials_file", fallback="").strip()
 
     if creds_file and Path(creds_file).exists():
-        creds = service_account.Credentials.from_service_account_file(creds_file)
-        return bigquery.Client(project=project_id, credentials=creds)
-    elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        return bigquery.Client(project=project_id)
-    else:
-        return bigquery.Client(project=project_id)
+        try:
+            creds = service_account.Credentials.from_service_account_file(creds_file)
+            client = bigquery.Client(project=project_id, credentials=creds)
+            # Verificar si la service account tiene acceso a JOBS_BY_PROJECT
+            client.query("SELECT 1 FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT LIMIT 1").result()
+            return client
+        except Exception:
+            # Fallback a ADC del sistema para capturar todas las consultas del proyecto
+            pass
+
+    return bigquery.Client(project=project_id)
 
 
 def print_dashboard(db_path: Path = DB_DEFAULT_PATH, sync_message: str = ""):
